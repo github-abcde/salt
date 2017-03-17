@@ -104,7 +104,7 @@ def __virtual__():
         return __virtualname__
 
     return (False, 'The gpg execution module cannot be loaded; the'
-       ' gnupg python module is not installed.')
+            ' gnupg python module is not installed.')
 
 
 def _get_user_info(user=None):
@@ -240,6 +240,16 @@ def search_keys(text, keyserver=None, user=None):
 
         salt '*' gpg.search_keys user@example.com keyserver=keyserver.ubuntu.com user=username
 
+    Jinja Example:
+
+    .. code-block:: jinja
+
+        search_keys_id:
+          gpg.search_keys:
+          - name: 'user@example.com'
+          - keyserver: 'keyserver.ubuntu.com'
+          - user: 'username'
+
     '''
     if GPG_1_3_1:
         raise SaltInvocationError('The search_keys function is not support with this version of python-gnupg.')
@@ -371,7 +381,7 @@ def create_key(key_type='RSA',
                subkey_type=None,
                subkey_length=None,
                expire_date=None,
-               use_passphrase=False,
+               passphrase=None,
                user=None,
                gnupghome=None):
     '''
@@ -417,9 +427,8 @@ def create_key(key_type='RSA',
         You can specify an ISO date, A number of days/weeks/months/years,
         an epoch value, or 0 for a non-expiring key.
 
-    use_passphrase
-        Whether to use a passphrase with the signing key. Passphrase is received
-        from Pillar.
+    passphrase
+        Passphrase to use with the signing key, default is None.
 
     user
         Which user's keychain to access, defaults to user Salt is running as.
@@ -462,14 +471,8 @@ def create_key(key_type='RSA',
     if expire_date:
         create_params['expire_date'] = expire_date
 
-    if use_passphrase:
-        gpg_passphrase = __salt__['pillar.get']('gpg_passphrase')
-        if not gpg_passphrase:
-            ret['res'] = False
-            ret['message'] = "gpg_passphrase not available in pillar."
-            return ret
-        else:
-            create_params['passphrase'] = gpg_passphrase
+    if passphrase:
+        create_params['passphrase'] = passphrase
 
     input_data = gpg.gen_key_input(**create_params)
 
@@ -962,7 +965,7 @@ def sign(user=None,
          text=None,
          filename=None,
          output=None,
-         use_passphrase=False,
+         passphrase=None,
          gnupghome=None):
     '''
     Sign message or file
@@ -985,9 +988,8 @@ def sign(user=None,
     output
         The filename where the signed file will be written, default is standard out.
 
-    use_passphrase
-        Whether to use a passphrase with the signing key. Passphrase is received
-        from Pillar.
+    passphrase
+        Passphrase to use with the signing key, default is None.
 
     gnupghome
         Specify the location where GPG keyring and related files are stored.
@@ -1000,31 +1002,34 @@ def sign(user=None,
 
         salt '*' gpg.sign filename='/path/to/important.file'
 
-        salt '*' gpg.sign filename='/path/to/important.file' use_passphrase=True
+        salt '*' gpg.sign filename='/path/to/important.file' passphrase='werybigSecret!'
+
+    Jinja Example:
+
+    .. code-block:: jinja
+
+        sign_something:
+          gpg.sign:
+          - filename: '/path/to/important.file'
+          - passphrase: {{ salt['pillar.get']('gpg_passphrase', 'werybigSecret!') }}
 
     '''
     gpg = _create_gpg(user, gnupghome)
-    if use_passphrase:
-        gpg_passphrase = __salt__['pillar.get']('gpg_passphrase')
-        if not gpg_passphrase:
-            raise SaltInvocationError('gpg_passphrase not available in pillar.')
-    else:
-        gpg_passphrase = None
 
     # Check for at least one secret key to sign with
 
     gnupg_version = _LooseVersion(gnupg.__version__)
     if text:
         if gnupg_version >= '1.3.1':
-            signed_data = gpg.sign(text, default_key=keyid, passphrase=gpg_passphrase)
+            signed_data = gpg.sign(text, default_key=keyid, passphrase=passphrase)
         else:
-            signed_data = gpg.sign(text, keyid=keyid, passphrase=gpg_passphrase)
+            signed_data = gpg.sign(text, keyid=keyid, passphrase=passphrase)
     elif filename:
         with salt.utils.flopen(filename, 'rb') as _fp:
             if gnupg_version >= '1.3.1':
-                signed_data = gpg.sign(text, default_key=keyid, passphrase=gpg_passphrase)
+                signed_data = gpg.sign(text, default_key=keyid, passphrase=passphrase)
             else:
-                signed_data = gpg.sign_file(_fp, keyid=keyid, passphrase=gpg_passphrase)
+                signed_data = gpg.sign_file(_fp, keyid=keyid, passphrase=passphrase)
         if output:
             with salt.utils.flopen(output, 'w') as fout:
                 fout.write(signed_data.data)
@@ -1062,10 +1067,10 @@ def verify(text=None,
 
         salt '*' gpg.verify filename='/path/to/important.file'
 
-        salt '*' gpg.verify filename='/path/to/important.file' use_passphrase=True
+        salt '*' gpg.verify filename='/path/to/important.file'
 
     '''
-    gpg = _create_gpg(user)
+    gpg = _create_gpg(user, gnupghome)
 
     if text:
         verified = gpg.verify(text)
@@ -1094,7 +1099,7 @@ def encrypt(user=None,
             filename=None,
             output=None,
             sign=None,
-            use_passphrase=False,
+            passphrase=None,
             gnupghome=None,
             bare=False):
     '''
@@ -1121,9 +1126,8 @@ def encrypt(user=None,
         Whether to sign, in addition to encrypt, the data. ``True`` to use
         default key or fingerprint to specify a different key to sign with.
 
-    use_passphrase
-        Whether to use a passphrase with the signing key. Passphrase is received
-        from Pillar.
+    passphrase
+        Passphrase to use with the signing key, default is None.
 
     gnupghome
         Specify the location where GPG keyring and related files are stored.
@@ -1140,7 +1144,16 @@ def encrypt(user=None,
 
         salt '*' gpg.encrypt filename='/path/to/important.file'
 
-        salt '*' gpg.encrypt filename='/path/to/important.file' use_passphrase=True
+        salt '*' gpg.encrypt filename='/path/to/important.file' passphrase='werybigSecret!'
+
+    Jinja Example:
+
+    .. code-block:: jinja
+
+        encrypt_something:
+          gpg.encrypt:
+          - filename: '/path/to/important.file'
+          - passphrase: {{ salt['pillar.get']('gpg_passphrase', 'werybigSecret!') }}
 
     '''
     ret = {
@@ -1149,30 +1162,22 @@ def encrypt(user=None,
     }
     gpg = _create_gpg(user, gnupghome)
 
-    if use_passphrase:
-        gpg_passphrase = __salt__['pillar.get']('gpg_passphrase')
-        if not gpg_passphrase:
-            raise SaltInvocationError('gpg_passphrase not available in pillar.')
-        gpg_passphrase = gpg_passphrase['gpg_passphrase']
-    else:
-        gpg_passphrase = None
-
     if text:
-        result = gpg.encrypt(text, recipients, passphrase=gpg_passphrase)
+        result = gpg.encrypt(text, recipients, passphrase=passphrase)
     elif filename:
         if GPG_1_3_1:
             # This version does not allow us to encrypt using the
             # file stream # have to read in the contents and encrypt.
             with salt.utils.flopen(filename, 'rb') as _fp:
                 _contents = _fp.read()
-            result = gpg.encrypt(_contents, recipients, passphrase=gpg_passphrase, output=output)
+            result = gpg.encrypt(_contents, recipients, passphrase=passphrase, output=output)
         else:
             # This version allows encrypting the file stream
             with salt.utils.flopen(filename, 'rb') as _fp:
                 if output:
-                    result = gpg.encrypt_file(_fp, recipients, passphrase=gpg_passphrase, output=output, sign=sign)
+                    result = gpg.encrypt_file(_fp, recipients, passphrase=passphrase, output=output, sign=sign)
                 else:
-                    result = gpg.encrypt_file(_fp, recipients, passphrase=gpg_passphrase, sign=sign)
+                    result = gpg.encrypt_file(_fp, recipients, passphrase=passphrase, sign=sign)
     else:
         raise SaltInvocationError('filename or text must be passed.')
 
@@ -1198,7 +1203,7 @@ def decrypt(user=None,
             text=None,
             filename=None,
             output=None,
-            use_passphrase=False,
+            passphrase=None,
             gnupghome=None,
             bare=False):
     '''
@@ -1218,9 +1223,8 @@ def decrypt(user=None,
     output
         The filename where the decrypted data will be written, default is standard out.
 
-    use_passphrase
-        Whether to use a passphrase with the signing key. Passphrase is received
-        from Pillar.
+    passphrase
+        Passphrase to use with the signing key, default is None.
 
     gnupghome
         Specify the location where GPG keyring and related files are stored.
@@ -1235,7 +1239,18 @@ def decrypt(user=None,
 
         salt '*' gpg.decrypt filename='/path/to/important.file.gpg'
 
-        salt '*' gpg.decrypt filename='/path/to/important.file.gpg' use_passphrase=True
+        salt '*' gpg.decrypt filename='/path/to/important.file.gpg' passphrase='werybigSecret!'
+
+        salt '*' gpg.decrypt filename='/path/to/important.file.gpg' passphrase='werybigSecret!' output='/path/to/decrypted.file'
+
+    Jinja Example:
+
+    ... code-block:: jinja
+
+        decrypt_file:
+          gpg.decrypt:
+          - filename: '/path/to/important.file.gpg'
+          - passphrase: {{ salt['pillar.get']('gpg_passphrase', 'werybigSecret!') }}
 
     '''
     ret = {
@@ -1243,22 +1258,15 @@ def decrypt(user=None,
         'comment': ''
     }
     gpg = _create_gpg(user, gnupghome)
-    if use_passphrase:
-        gpg_passphrase = __salt__['pillar.get']('gpg_passphrase')
-        if not gpg_passphrase:
-            raise SaltInvocationError('gpg_passphrase not available in pillar.')
-        gpg_passphrase = gpg_passphrase['gpg_passphrase']
-    else:
-        gpg_passphrase = None
 
     if text:
-        result = gpg.decrypt(text, passphrase=gpg_passphrase)
+        result = gpg.decrypt(text, passphrase=passphrase, output=output)
     elif filename:
         with salt.utils.flopen(filename, 'rb') as _fp:
             if output:
-                result = gpg.decrypt_file(_fp, passphrase=gpg_passphrase, output=output)
+                result = gpg.decrypt_file(_fp, passphrase=passphrase, output=output)
             else:
-                result = gpg.decrypt_file(_fp, passphrase=gpg_passphrase)
+                result = gpg.decrypt_file(_fp, passphrase=passphrase)
     else:
         raise SaltInvocationError('filename or text must be passed.')
 
