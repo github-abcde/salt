@@ -382,6 +382,7 @@ def create_key(key_type='RSA',
                subkey_length=None,
                expire_date=None,
                passphrase=None,
+               passphrase_pillar=None,
                user=None,
                gnupghome=None):
     '''
@@ -427,6 +428,9 @@ def create_key(key_type='RSA',
         You can specify an ISO date, A number of days/weeks/months/years,
         an epoch value, or 0 for a non-expiring key.
 
+    passphrase_pillar
+        Pillar key to retrieve the passphrase from, default is None.
+
     passphrase
         Passphrase to use with the signing key, default is None.
 
@@ -470,6 +474,13 @@ def create_key(key_type='RSA',
 
     if expire_date:
         create_params['expire_date'] = expire_date
+
+    if passphrase_pillar:
+        if passphrase_pillar in __pillar__:
+            create_params['passphrase'] = __pillar__.get(passphrase_pillar)
+        else:
+            raise SaltInvocationError('Passphrase could not be read from pillar. '
+                                      '{0} does not exist.'.format(passphrase_pillar))
 
     if passphrase:
         create_params['passphrase'] = passphrase
@@ -965,6 +976,7 @@ def sign(user=None,
          text=None,
          filename=None,
          output=None,
+         passphrase_pillar=None,
          passphrase=None,
          gnupghome=None):
     '''
@@ -991,6 +1003,9 @@ def sign(user=None,
     passphrase
         Passphrase to use with the signing key, default is None.
 
+    passphrase_pillar
+        Pillar key to retrieve the passphrase from, default is None.
+
     gnupghome
         Specify the location where GPG keyring and related files are stored.
 
@@ -1016,20 +1031,30 @@ def sign(user=None,
     '''
     gpg = _create_gpg(user, gnupghome)
 
+    gpg_passphrase = None
+    if passphrase_pillar:
+        if passphrase_pillar in __pillar__:
+            gpg_passphrase = __pillar__.get(passphrase_pillar)
+        else:
+            raise SaltInvocationError('Passphrase could not be read from pillar. '
+                                      '{0} does not exist.'.format(passphrase_pillar))
+    if passphrase:
+        gpg_passphrase = passphrase
+
     # Check for at least one secret key to sign with
 
     gnupg_version = _LooseVersion(gnupg.__version__)
     if text:
         if gnupg_version >= '1.3.1':
-            signed_data = gpg.sign(text, default_key=keyid, passphrase=passphrase)
+            signed_data = gpg.sign(text, default_key=keyid, passphrase=gpg_passphrase)
         else:
-            signed_data = gpg.sign(text, keyid=keyid, passphrase=passphrase)
+            signed_data = gpg.sign(text, keyid=keyid, passphrase=gpg_passphrase)
     elif filename:
         with salt.utils.flopen(filename, 'rb') as _fp:
             if gnupg_version >= '1.3.1':
-                signed_data = gpg.sign(text, default_key=keyid, passphrase=passphrase)
+                signed_data = gpg.sign(text, default_key=keyid, passphrase=gpg_passphrase)
             else:
-                signed_data = gpg.sign_file(_fp, keyid=keyid, passphrase=passphrase)
+                signed_data = gpg.sign_file(_fp, keyid=keyid, passphrase=gpg_passphrase)
         if output:
             with salt.utils.flopen(output, 'w') as fout:
                 fout.write(signed_data.data)
@@ -1100,6 +1125,7 @@ def encrypt(user=None,
             output=None,
             sign=None,
             passphrase=None,
+            passphrase_pillar=None,
             gnupghome=None,
             bare=False):
     '''
@@ -1128,6 +1154,9 @@ def encrypt(user=None,
 
     passphrase
         Passphrase to use with the signing key, default is None.
+
+    passphrase_pillar
+        Pillar key to retrieve the passphrase from, default is None.
 
     gnupghome
         Specify the location where GPG keyring and related files are stored.
@@ -1162,22 +1191,32 @@ def encrypt(user=None,
     }
     gpg = _create_gpg(user, gnupghome)
 
+    gpg_passphrase = None
+    if passphrase_pillar:
+        if passphrase_pillar in __pillar__:
+            gpg_passphrase = __pillar__.get(passphrase_pillar)
+        else:
+            raise SaltInvocationError('Passphrase could not be read from pillar. '
+                                      '{0} does not exist.'.format(passphrase_pillar))
+    if passphrase:
+        gpg_passphrase = passphrase
+
     if text:
-        result = gpg.encrypt(text, recipients, passphrase=passphrase)
+        result = gpg.encrypt(text, recipients, passphrase=gpg_passphrase, output=output)
     elif filename:
         if GPG_1_3_1:
             # This version does not allow us to encrypt using the
             # file stream # have to read in the contents and encrypt.
             with salt.utils.flopen(filename, 'rb') as _fp:
                 _contents = _fp.read()
-            result = gpg.encrypt(_contents, recipients, passphrase=passphrase, output=output)
+            result = gpg.encrypt(_contents, recipients, passphrase=gpg_passphrase, output=output)
         else:
             # This version allows encrypting the file stream
             with salt.utils.flopen(filename, 'rb') as _fp:
                 if output:
-                    result = gpg.encrypt_file(_fp, recipients, passphrase=passphrase, output=output, sign=sign)
+                    result = gpg.encrypt_file(_fp, recipients, passphrase=gpg_passphrase, output=output, sign=sign)
                 else:
-                    result = gpg.encrypt_file(_fp, recipients, passphrase=passphrase, sign=sign)
+                    result = gpg.encrypt_file(_fp, recipients, passphrase=gpg_passphrase, sign=sign)
     else:
         raise SaltInvocationError('filename or text must be passed.')
 
@@ -1204,6 +1243,7 @@ def decrypt(user=None,
             filename=None,
             output=None,
             passphrase=None,
+            passphrase_pillar=None,
             gnupghome=None,
             bare=False):
     '''
@@ -1226,6 +1266,9 @@ def decrypt(user=None,
     passphrase
         Passphrase to use with the signing key, default is None.
 
+    passphrase_pillar
+        Pillar key to retrieve the passphrase from, default is None.
+
     gnupghome
         Specify the location where GPG keyring and related files are stored.
 
@@ -1243,6 +1286,8 @@ def decrypt(user=None,
 
         salt '*' gpg.decrypt filename='/path/to/important.file.gpg' passphrase='werybigSecret!' output='/path/to/decrypted.file'
 
+        salt '*' gpg.decrypt filename='/path/to/important.file.gpg' passphrase_pillar=gpg_passphrase
+
     Jinja Example:
 
     ... code-block:: jinja
@@ -1252,6 +1297,12 @@ def decrypt(user=None,
           - filename: '/path/to/important.file.gpg'
           - passphrase: {{ salt['pillar.get']('gpg_passphrase', 'werybigSecret!') }}
 
+        decrypt_file:
+          gpg.decrypt:
+          - filename: '/path/to/important.file.gpg'
+          - passphrase_pillar: gpg_passphrase
+          - output: '/path/to/decrypted.file'
+
     '''
     ret = {
         'res': True,
@@ -1259,14 +1310,24 @@ def decrypt(user=None,
     }
     gpg = _create_gpg(user, gnupghome)
 
+    gpg_passphrase = None
+    if passphrase_pillar:
+        if passphrase_pillar in __pillar__:
+            gpg_passphrase = __pillar__.get(passphrase_pillar)
+        else:
+            raise SaltInvocationError('Passphrase could not be read from pillar. '
+                                      '{0} does not exist.'.format(passphrase_pillar))
+    if passphrase:
+        gpg_passphrase = passphrase
+
     if text:
-        result = gpg.decrypt(text, passphrase=passphrase, output=output)
+        result = gpg.decrypt(text, passphrase=gpg_passphrase, output=output)
     elif filename:
         with salt.utils.flopen(filename, 'rb') as _fp:
             if output:
-                result = gpg.decrypt_file(_fp, passphrase=passphrase, output=output)
+                result = gpg.decrypt_file(_fp, passphrase=gpg_passphrase, output=output)
             else:
-                result = gpg.decrypt_file(_fp, passphrase=passphrase)
+                result = gpg.decrypt_file(_fp, passphrase=gpg_passphrase)
     else:
         raise SaltInvocationError('filename or text must be passed.')
 
