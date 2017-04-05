@@ -475,15 +475,9 @@ def create_key(key_type='RSA',
     if expire_date:
         create_params['expire_date'] = expire_date
 
-    if passphrase_pillar:
-        if passphrase_pillar in __pillar__:
-            create_params['passphrase'] = __pillar__.get(passphrase_pillar)
-        else:
-            raise SaltInvocationError('Passphrase could not be read from pillar. '
-                                      '{0} does not exist.'.format(passphrase_pillar))
-
-    if passphrase:
-        create_params['passphrase'] = passphrase
+    gpg_passphrase = _get_passphrase(passphrase, passphrase_pillar)
+    if gpg_passphrase is not None:
+        create_params['passphrase'] = gpg_passphrase
 
     input_data = gpg.gen_key_input(**create_params)
 
@@ -1030,19 +1024,9 @@ def sign(user=None,
 
     '''
     gpg = _create_gpg(user, gnupghome)
-
-    gpg_passphrase = None
-    if passphrase_pillar:
-        if passphrase_pillar in __pillar__:
-            gpg_passphrase = __pillar__.get(passphrase_pillar)
-        else:
-            raise SaltInvocationError('Passphrase could not be read from pillar. '
-                                      '{0} does not exist.'.format(passphrase_pillar))
-    if passphrase:
-        gpg_passphrase = passphrase
+    gpg_passphrase = _get_passphrase(passphrase, passphrase_pillar)
 
     # Check for at least one secret key to sign with
-
     gnupg_version = _LooseVersion(gnupg.__version__)
     if text:
         if gnupg_version >= '1.3.1':
@@ -1190,16 +1174,7 @@ def encrypt(user=None,
         'comment': ''
     }
     gpg = _create_gpg(user, gnupghome)
-
-    gpg_passphrase = None
-    if passphrase_pillar:
-        if passphrase_pillar in __pillar__:
-            gpg_passphrase = __pillar__.get(passphrase_pillar)
-        else:
-            raise SaltInvocationError('Passphrase could not be read from pillar. '
-                                      '{0} does not exist.'.format(passphrase_pillar))
-    if passphrase:
-        gpg_passphrase = passphrase
+    gpg_passphrase = _get_passphrase(passphrase, passphrase_pillar)
     symmetric = recipients is None and gpg_passphrase is not None
 
     if text:
@@ -1320,16 +1295,7 @@ def decrypt(user=None,
         'comment': ''
     }
     gpg = _create_gpg(user, gnupghome)
-
-    gpg_passphrase = None
-    if passphrase_pillar:
-        if passphrase_pillar in __pillar__:
-            gpg_passphrase = __pillar__.get(passphrase_pillar)
-        else:
-            raise SaltInvocationError('Passphrase could not be read from pillar. '
-                                      '{0} does not exist.'.format(passphrase_pillar))
-    if passphrase:
-        gpg_passphrase = passphrase
+    gpg_passphrase = _get_passphrase(passphrase, passphrase_pillar)
 
     if text:
         result = gpg.decrypt(text, passphrase=gpg_passphrase, output=output)
@@ -1357,3 +1323,21 @@ def decrypt(user=None,
         log.error(result.stderr)
 
     return ret
+
+
+def _get_passphrase(passphrase=None, passphrase_pillar=None):
+    '''
+    Returns passphrase from pillar if passphrase_pillar is specified.
+    Raises SaltInvocationError if passphrase_pillar is specified, but not found in pillar.
+    Returns passphrase if specified.
+    Returns None if neither are specified.
+    '''
+    result = None
+    if passphrase_pillar is not None:
+        result = __salt__['pillar.get'](passphrase_pillar, None)
+        if result is None:
+            raise SaltInvocationError('Passphrase could not be read from pillar. '
+                                      '{0} does not exist.'.format(passphrase_pillar))
+    if passphrase is not None:
+        result = passphrase
+    return result
