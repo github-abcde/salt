@@ -1198,11 +1198,11 @@ def encrypt(user=None,
             # This version allows encrypting the file stream
             with salt.utils.flopen(filename, 'rb') as _fp:
                 result = gpg.encrypt_file(_fp,
-                                              recipients,
-                                              passphrase=gpg_passphrase,
-                                              output=output,
-                                              sign=sign,
-                                              symmetric=symemtric)
+                                          recipients,
+                                          passphrase=gpg_passphrase,
+                                          output=output,
+                                          sign=sign,
+                                          symmetric=symemtric)
     else:
         raise SaltInvocationError('filename or text must be passed.')
 
