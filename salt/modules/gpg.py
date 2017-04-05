@@ -1327,9 +1327,9 @@ def decrypt(user=None,
 
 def _get_passphrase(passphrase=None, passphrase_pillar=None):
     '''
-    Returns passphrase from pillar if passphrase_pillar is specified.
+    Returns passphrase from pillar if passphrase_pillar is specified (and password is not).
     Raises SaltInvocationError if passphrase_pillar is specified, but not found in pillar.
-    Returns passphrase if specified.
+    Returns passphrase if specified, overrides passphrase_pillar if both are specified.
     Returns None if neither are specified.
     '''
     result = None
