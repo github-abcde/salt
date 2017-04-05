@@ -1202,7 +1202,7 @@ def encrypt(user=None,
                                           passphrase=gpg_passphrase,
                                           output=output,
                                           sign=sign,
-                                          symmetric=symemtric)
+                                          symmetric=symmetric)
     else:
         raise SaltInvocationError('filename or text must be passed.')
 
