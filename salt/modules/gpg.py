@@ -1200,23 +1200,34 @@ def encrypt(user=None,
                                       '{0} does not exist.'.format(passphrase_pillar))
     if passphrase:
         gpg_passphrase = passphrase
+    symmetric = recipients is None and gpg_passphrase is not None
 
     if text:
-        result = gpg.encrypt(text, recipients, passphrase=gpg_passphrase, output=output)
+        result = gpg.encrypt(text,
+                             recipients,
+                             passphrase=gpg_passphrase,
+                             output=output,
+                             symmetric=symmetric)
     elif filename:
         if GPG_1_3_1:
             # This version does not allow us to encrypt using the
             # file stream # have to read in the contents and encrypt.
             with salt.utils.flopen(filename, 'rb') as _fp:
                 _contents = _fp.read()
-            result = gpg.encrypt(_contents, recipients, passphrase=gpg_passphrase, output=output)
+            result = gpg.encrypt(_contents,
+                                 recipients,
+                                 passphrase=gpg_passphrase,
+                                 output=output,
+                                 symmetric=symmetric)
         else:
             # This version allows encrypting the file stream
             with salt.utils.flopen(filename, 'rb') as _fp:
-                if output:
-                    result = gpg.encrypt_file(_fp, recipients, passphrase=gpg_passphrase, output=output, sign=sign)
-                else:
-                    result = gpg.encrypt_file(_fp, recipients, passphrase=gpg_passphrase, sign=sign)
+                result = gpg.encrypt_file(_fp,
+                                              recipients,
+                                              passphrase=gpg_passphrase,
+                                              output=output,
+                                              sign=sign,
+                                              symmetric=symemtric)
     else:
         raise SaltInvocationError('filename or text must be passed.')
 
@@ -1324,10 +1335,7 @@ def decrypt(user=None,
         result = gpg.decrypt(text, passphrase=gpg_passphrase, output=output)
     elif filename:
         with salt.utils.flopen(filename, 'rb') as _fp:
-            if output:
-                result = gpg.decrypt_file(_fp, passphrase=gpg_passphrase, output=output)
-            else:
-                result = gpg.decrypt_file(_fp, passphrase=gpg_passphrase)
+            result = gpg.decrypt_file(_fp, passphrase=gpg_passphrase, output=output)
     else:
         raise SaltInvocationError('filename or text must be passed.')
 
