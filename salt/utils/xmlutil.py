@@ -6,6 +6,9 @@ Various XML utilities
 # Import Python libs
 from __future__ import absolute_import
 
+# Import Salt libs
+from salt._compat import ElementTree as ET
+from salt.exceptions import SaltInvocationError, NotImplementedError
 
 def to_dict(xmltree):
     '''
@@ -43,3 +46,23 @@ def to_dict(xmltree):
                 xmldict[name] = [xmldict[name]]
             xmldict[name].append(to_dict(item))
     return xmldict
+
+
+def from_dict(root_node, data):
+    '''
+    Converts a list, dict or OrderedDict to an XML tree
+    linked as children to the supplied root_node.
+    No support for attributes (yet).
+    Returns nothing, as the supplied root_node is modified.
+    '''
+    if not isinstance(root_node, ET.Element):
+        raise SaltInvocationError('The supplied root_node is not an ET.Element')
+    if isinstance(data, list):
+        for item in data:
+            from_dict(root_node, item)
+    elif isinstance(data, (dict, OrderedDict)):
+        for k, v in data.iteritems():
+            item_node = ET.SubElement(root_node, k)
+            from_dict(item_node, v)
+    else:
+        ET.SubElement(root_node, data)
