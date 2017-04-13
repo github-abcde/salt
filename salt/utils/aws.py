@@ -273,6 +273,7 @@ def sig4(method, endpoint, params, prov_dict,
         signed_headers,
         payload_hash
     ))
+    LOG.debug('salt/utils/aws: sig4:\n\t\tcanonical_request: {0}'.format(canonical_request))
 
     # Create the string to sign
     credential_scope = '/'.join((datestamp, region, product, 'aws4_request'))
@@ -311,6 +312,7 @@ def sig4(method, endpoint, params, prov_dict,
     new_headers['Authorization'] = authorization_header
 
     requesturl = '{0}?{1}'.format(requesturl, querystring)
+    LOG.debug('salt/utils/aws: sig4:\n\t\trequesturl: {0}\n\t\theaders: {1}'.format(requesturl, new_headers))
     return new_headers, requesturl
 
 
@@ -569,7 +571,7 @@ def get_region(opts=None, provider=None):
     '''
     Return the region to use, in this order:
         opts['region']
-        provider['region']
+        provider['location']
         get_region_from_metadata()
         DEFAULT_REGION
     '''
@@ -577,7 +579,7 @@ def get_region(opts=None, provider=None):
         opts = {}
     ret = opts.get('region')
     if ret is None and provider is not None:
-        ret = provider.get('region')
+        ret = provider.get('location')
     if ret is None:
         ret = get_region_from_metadata()
     if ret is None:
