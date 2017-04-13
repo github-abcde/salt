@@ -8,7 +8,9 @@ from __future__ import absolute_import
 
 # Import Salt libs
 from salt._compat import ElementTree as ET
-from salt.exceptions import SaltInvocationError, NotImplementedError
+from salt.exceptions import SaltInvocationError
+from salt.ext import six
+from salt.utils.odict import OrderedDict
 
 def to_dict(xmltree):
     '''
@@ -55,14 +57,14 @@ def from_dict(root_node, data):
     No support for attributes (yet).
     Returns nothing, as the supplied root_node is modified.
     '''
-    if not isinstance(root_node, ET.Element):
+    if not ET.iselement(root_node):
         raise SaltInvocationError('The supplied root_node is not an ET.Element')
     if isinstance(data, list):
         for item in data:
             from_dict(root_node, item)
     elif isinstance(data, (dict, OrderedDict)):
-        for k, v in data.iteritems():
+        for k, v in six.iteritems(data):
             item_node = ET.SubElement(root_node, k)
             from_dict(item_node, v)
     else:
-        ET.SubElement(root_node, data)
+        root_node.text = data
