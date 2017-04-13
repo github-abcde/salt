@@ -75,6 +75,7 @@ except ImportError:
 
 # Import Salt libs
 import salt.utils
+import salt.utils.aws
 from salt.ext import six
 import salt.utils.xmlutil as xml
 from salt._compat import ElementTree as ET
@@ -92,38 +93,69 @@ def __virtual__():
     return HAS_REQUESTS
 
 
-def _delete_bucket(bucket, subresource=None, **kwargs):
+def delete_bucket(bucket, subresource='', key=None, keyid=None, region=None):
+    '''
+    Deletes a bucket, or deletes a subresource of a bucket
+    Returns True on success, False on error
+    '''
+    res = False
+    try:
+        kwargs = {'key': key, 'keyid': keyid, 'region': region}
+        res = _delete_bucket(bucket, subresource=subresource, **kwargs)
+    except CommandExecutionError as ex:
+        log.error('salt/modules/s3:delete_bucket: Error deleting {0}?{1}: {2}'.format(bucket, subresource, ex))
+    return res
+
+
+def _delete_bucket(bucket, subresource='', **kwargs):
     '''
     Delete a bucket, or delete subresources of a bucket.
     Returnvalue: True on success
     Exceptions: SaltInvocationError, CommandExecutionError
     '''
+    log.debug('HERBERT: salt/modules/s3:_delete_bucket:\n' +
+              '\t\tbucket: {0}\n'.format(bucket) +
+              '\t\tsubresource: {0}'.format(subresource))
     kwargs = _get_defaults(**kwargs)
-    parameters = {'analytics': {'id': {'required': True}},
-                  'cors': {},
-                  'inventory': {'id': {'required': True}},
-                  'lifecycle': {},
-                  'metrics': {'id': {'required': True}},
-                  'policy': {},
-                  'replication': {},
-                  'tagging': {},
-                  'website': {}}
-    params = _check_subresources(subresource, parameters.keys())
-    params.update(_check_parameters(parameters[subresource], **kwargs))
-    endpoint, uri = _generate_endpoint_uri(bucket=bucket, **kwargs)
-
-    headers, requesturl = _generate_headers_requesturl('PUT', endpoint, uri, headers,
-                                                       params, data, prov_dict, role_arn)
+    log.debug('HERBERT: salt/modules/s3:_delete_bucket:\n\t\tkwargs: {0}'.format(kwargs))
+    subresource_data = {'': {},
+                        'analytics': {'parameters': {'id': {'required': True}}},
+                        'cors': {},
+                        'inventory': {'parameters': {'id': {'required': True}}},
+                        'lifecycle': {},
+                        'metrics': {'parameters': {'id': {'required': True}}},
+                        'policy': {},
+                        'replication': {},
+                        'tagging': {},
+                        'website': {}}
+    params = _check_subresources(subresource, subresource_data)
+    params.update(_check_parameters(subresource_data[subresource].get('parameters', {}), **kwargs))
+    log.debug('salt/modules/s3:_put_bucket:\n\t\tparams: {0}'.format(params))
+    del params['']
+    headers = _check_headers(subresource_data[subresource].get('headers', {}), **kwargs)
+    proto, endpoint, uri = _generate_proto_endpoint_uri(bucket=bucket, **kwargs)
+    headers, requesturl = _generate_headers_request_url(
+            'DELETE',
+            proto,
+            endpoint,
+            uri,
+            headers,
+            params,
+            '',
+            kwargs['region'],
+            kwargs['role_arn'],
+            kwargs['key'],
+            kwargs['keyid'])
 
     log.debug('modules/s3:delete: S3 Request: {0}'.format(requesturl))
     log.debug('modules/s3:delete: S3 Headers::')
     log.debug('modules/s3:delete: Authorization: {0}'.format(headers['Authorization']))
 
-    result = _do_request(method,
-                         request_url,
+    result = _do_request('DELETE',
+                         requesturl,
                          headers=headers,
-                         verify=verify_ssl)
-    err = _result_error_check(result)
+                         verify=kwargs['verify_ssl'])
+    err = _generic_result_error_check(result)
     log.debug('modules/s3:delete: S3 Response Status Code: {0}'.format(result.status_code))
     if err:
         raise CommandExecutionError('S3 DELETE operation failed: {0}'.format(err))
@@ -134,19 +166,90 @@ def _delete_bucket(bucket, subresource=None, **kwargs):
     return True
 
 
+def _delete_bucket_object(bucket, objectname, **kwargs):
+    '''
+    Deletes an object from a bucket, or a subresource from an object in a bucket.
+    Raises CommandExecutionError on error
+    '''
+    kwargs = _get_defaults(**kwargs)
+    subresource_data = {'tagging': {}}
+    params = _check_subresources(subresource, subresource_data)
+    params.update(_check_parameters(subresource_data[subresource].get('parameters', {}), **kwargs))
+    log.debug('salt/modules/s3:_put_bucket:\n\t\tparams: {0}'.format(params))
+    del params['']
+    headers = _check_headers(subresource_data[subresource].get('headers', {}), **kwargs)
+    proto, endpoint, uri = _generate_proto_endpoint_uri(bucket=bucket, **kwargs)
+    headers, requesturl = _generate_headers_request_url(
+            'DELETE',
+            proto,
+            endpoint,
+            uri,
+            headers,
+            params,
+            data,
+            kwargs['region'],
+            kwargs['role_arn'],
+            kwargs['key'],
+            kwargs['keyid'])
+
+    log.debug('modules/s3:delete: S3 Request: {}'.format(requesturl))
+    log.debug('modules/s3:delete: S3 Headers::')
+    log.debug('modules/s3:delete: Authorization: {}'.format(headers['Authorization']))
+    result = _do_request(method,
+                         requesturl,
+                         headers=headers,
+                         verify=verify_ssl)
+    err = _generic_result_error_check(result)
+    log.debug('modules/s3:_delete_bucket:\n' +
+              '\t\tresult.status_code: {}\n'.format(result.status_code) +
+              '\t\tresult.text: {}'.format(result.text))
+    if err:
+        return err
+    if result.content:
+        ret = xml.to_dict(result.content)
+    else:
+        ret = True
+    return ret
+
+
+def list_buckets(key=None, keyid=None, region=None):
+    '''
+    Lists all buckets in the region specified or the region of the EC2 instance
+    from where this is called.
+    '''
+    ret = []
+    kwargs = {'key': key, 'keyid': keyid, 'region': region}
+    try:
+        ret = _list_buckets(**kwargs)
+    except CommandExecutionError as ex:
+        log.error('salt/modules/s3:list_buckets: Error listing buckets: {0}'.format(ex))
+    return ret
+
+
 def _list_buckets(**kwargs):
     '''
     Returns a list of all buckets owned.
     Each bucket is represented by a dict containing the 'Name' and the 'CreationDate' keys.
     '''
     kwargs = _get_defaults(**kwargs)
-    headers, requesturl = _generate_headers_requesturl('GET', service_url, '/', headers,
-                                                       params, data, prov_dict, role_arn)
+    proto, endpoint, uri = _generate_proto_endpoint_uri(bucket=bucket, **kwargs)
+    headers, requesturl = _generate_headers_request_url(
+            'GET',
+            proto,
+            endpoint,
+            uri,
+            headers,
+            params,
+            None,
+            kwargs['region'],
+            kwargs['role_arn'],
+            kwargs['key'],
+            kwargs['keyid'])
     result = _do_request(method,
-                         request_url,
+                         requesturl,
                          headers=headers,
                          verify=verify_ssl)
-    err = _result_error_check(result)
+    err = _generic_result_error_check(result)
     log.debug('utils/s3:list: S3 Response Status Code: {0}'.format(result.status_code))
     if err:
         raise CommandExecutionError('S3 list operation failed: {0}'.format(err))
@@ -158,7 +261,58 @@ def _list_buckets(**kwargs):
     return ret
 
 
-def _get_bucket(bucket, subresource=None, **kwargs):
+def get_bucket(bucket, subresource='', key=None, keyid=None, region=None, **kwargs):
+    '''
+    List the contents of a bucket or get subresources of a bucket.
+    In case of no subresource:
+      Returns a list of dicts, each entry with the keys: Key, LastModified, ETag, Size, StorageClass
+    '''
+    ret = None
+    if subresource in ['', 'versions']:
+        ret = []
+        list_base_tag = {'': 'Contents', 'versions': 'Version'}
+        if 'continuation_token' in kwargs:
+            del kwargs['continuation_token']
+        try:
+            result = _get_bucket(bucket,
+                                 subresource=subresource,
+                                 key=key,
+                                 keyid=keyid,
+                                 region=region,
+                                 **kwargs)
+            for item in result.get(list_base_tag[subresource], []):
+                ret.append(item)
+            while result['IsTruncated'] == 'true':
+                result = _get_bucket(bucket,
+                                     subresource=subresource,
+                                     key=key,
+                                     keyid=keyid,
+                                     region=region,
+                                     continuation_token=result['NextContinuationToken'])
+                for item in result.get(list_base_tag[subresource], []):
+                    ret.append(item)
+        except CommandExecutionError as ex:
+            log.error('salt/modules/s3:get_bucket: ' +
+                      'Error retrieving contents of {0}?{1}: {2}'.format(bucket,
+                                                                         subresource,
+                                                                         ex))
+    else:
+        try:
+            ret = _get_bucket(bucket,
+                              subresource=subresource,
+                              key=key,
+                              keyid=keyid,
+                              region=region,
+                              **kwargs)
+        except CommandExecutionError as ex:
+            log.error('salt/modules/s3:get_bucket: ' +
+                      'Error retrieving contents of {0}?{1}: {2}'.format(bucket,
+                                                                         subresource,
+                                                                         ex))
+    return ret
+
+
+def _get_bucket(bucket, subresource='', **kwargs):
     '''
     List the contents of a bucket (up to 1000 objects) or get subresources of a bucket.
 
@@ -174,38 +328,69 @@ def _get_bucket(bucket, subresource=None, **kwargs):
 
     '''
     kwargs = _get_defaults(**kwargs)
-    possible_params = {'': {'delimiter': False, 'encoding-type': False, 'max-keys': False,
-                            'prefix': False, 'list-type': True, 'continuation-token': False,
-                            'fetch-owner': False, 'start-after': False},
-                       'analytics': {'id': True},
-                       'inventory': {'id': True},
-                       'metrics': {'id': True},
-                       'versions': {'delimiter': False, 'encoding-type': False,
-                                    'key-marker': False, 'max-keys': False, 'prefix': False,
-                                    'version-id-marker': False}}
-    if subresource is None:
-        subresource = ''
+    subresource_data = {'': {'parameters': {'delimiter': False, 'encoding-type': False,
+                                            'max-keys': False, 'prefix': False,
+                                            'list-type': True, 'continuation-token': False,
+                                            'fetch-owner': False, 'start-after': False}},
+                       'accelerate': {},
+                       'acl': {},
+                       'analytics': {'parameters': {'id': True}},
+                       'cors': {},
+                       'inventory': {'parameters': {'id': True}},
+                       'lifecycle': {},
+                       'location': {},
+                       'logging': {},
+                       'metrics': {'parameters': {'id': True}},
+                       'notification': {},
+                       'versions': {'parameters': {'delimiter': False, 'encoding-type': False,
+                                                   'key-marker': False, 'max-keys': False,
+                                                   'prefix': False, 'version-id-marker': False}},
+                       'policy': {},
+                       'replication': {},
+                       'requestPayment': {},
+                       'tagging': {},
+                       'versioning': {},
+                       'website': {}}
+    if subresource == '':
         kwargs.update({'list-type': '2'})
-    params = _check_subresources(subresource, parameters.keys())
-    params.update(_check_parameters(parameters.get(subresource, {}), **kwargs))
-    endpoint, uri = _generate_endpoint_uri(bucket=bucket, **kwargs)
-
-    headers, requesturl = _generate_headers_requesturl('GET', endpoint, uri, headers,
-                                                       params, data, prov_dict, role_arn)
+    params = _check_subresources(subresource, subresource_data)
+    params.update(_check_parameters(subresource_data[subresource].get('parameters', {}), **kwargs))
+    log.debug('salt/modules/s3:_put_bucket:\n\t\tparams: {0}'.format(params))
+    if subresource == '':
+        del params['']
+    headers = _check_headers(subresource_data[subresource].get('headers', {}), **kwargs)
+    proto, endpoint, uri = _generate_proto_endpoint_uri(bucket=bucket, **kwargs)
+    headers, requesturl = _generate_headers_request_url(
+            'GET',
+            proto,
+            endpoint,
+            uri,
+            headers,
+            params,
+            '',
+            kwargs['region'],
+            kwargs['role_arn'],
+            kwargs['key'],
+            kwargs['keyid'])
     log.debug('modules/s3:delete: S3 Request: {0}'.format(requesturl))
     log.debug('modules/s3:delete: S3 Headers::')
     log.debug('modules/s3:delete: Authorization: {0}'.format(headers['Authorization']))
 
-    result = _do_request(method,
-                         request_url,
+    result = _do_request('GET',
+                         requesturl,
                          headers=headers,
-                         verify=verify_ssl)
-    err = _result_error_check(result)
-    log.debug('modules/s3:delete: S3 Response Status Code: {0}'.format(result.status_code))
+                         verify=kwargs['verify_ssl'])
+    err = _generic_result_error_check(result)
+    log.debug('modules/s3:_put_bucket:\n' +
+              '\t\tresult.status_code: {}\n'.format(result.status_code) +
+              '\t\tresult.text: {}'.format(result.text))
     if err:
-        raise CommandExecutionError('S3 GET operation failed: {0}'.format(err))
+        return err
     if result.content:
-        ret = xml.to_dict(result.content)
+        ret = xml.to_dict(ET.fromstring(result.content))
+    else:
+        ret = True
+    log.debug('HERBERT: salt/modules/s3:_get_bucket:\n\t\tret: {}'.format(ret))
     return ret
 
 
@@ -215,27 +400,45 @@ def _head_bucket(bucket, **kwargs):
     Raises CommandExecutionError if anything goes wrong.
     '''
     kwargs = _get_defaults(**kwargs)
-    endpoint, uri = _generate_endpoint_uri(bucket=bucket, **kwargs)
-
-    headers, requesturl = _generate_headers_requesturl('PUT', endpoint, uri, headers,
-                                                       params, data, prov_dict, role_arn)
+    proto, endpoint, uri = _generate_proto_endpoint_uri(bucket=bucket, **kwargs)
+    headers, requesturl = _generate_headers_request_url(
+            'PUT',
+            proto,
+            endpoint,
+            uri,
+            headers,
+            params,
+            data,
+            kwargs['region'],
+            kwargs['role_arn'],
+            kwargs['key'],
+            kwargs['keyid'])
     result = _do_request(method,
-                         request_url,
+                         requesturl,
                          headers=headers,
                          verify=verify_ssl)
-    err = _result_error_check(result)
+    err = _generic_result_error_check(result)
     log.debug('modules/s3:delete: S3 Response Status Code: {0}'.format(result.status_code))
     if err:
         raise CommandExecutionError('S3 GET operation failed: {0}'.format(err))
     return True
 
 
-def _put_bucket(bucket, subresource=None, **kwargs):
+def put_bucket(bucket, subresource='', key=None, keyid=None, region=None, **kwargs):
+    '''
+    Publicly exposed function for putting buckets
+    '''
+    return _put_bucket(bucket, subresource=subresource, key=key, keyid=keyid, region=region, **kwargs)
+
+
+def _put_bucket(bucket, subresource='', **kwargs):
     '''
     Creates a new S3 bucket, or modifies the subresource configuration.
     See also: http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketPUT.html
+    Generates headers as required.
     '''
     kwargs = _get_defaults(**kwargs)
+    log.debug('salt/modules/s3: _put_bucket:\n\t\tkwargs: {0}'.format(kwargs))
     subresource_data = {'': {'headers': {'x-amz-acl': False, 'x-amz-grant-read': False,
                                          'x-amz-grant-write': False, 'x-amz-grant-read-acp': False,
                                          'x-amz-grant-write-acp': False, 'x-amz-grant-full-control': False},
@@ -271,35 +474,55 @@ def _put_bucket(bucket, subresource=None, **kwargs):
                                        'body_root': 'VersioningConfiguration'},
                         'website': {'headers': {}, 'parameters': {},
                                     'body_root': 'WebsiteConfiguration'}}
-    if subresource is None:
-        subresource = ''
-    params = _check_subresources(subresource, parameters.keys())
-    params.update(_check_parameters(subresource_data[subresource]['parameters'], **kwargs))
-    headers = _check_headers(subresource_data[subresource]['headers'], **kwargs)
-    endpoint, uri = _generate_endpoint_uri(bucket=bucket, **kwargs)
+    if kwargs['region'] is not None and subresource == '' and kwargs.get('data', None) is None:
+        kwargs['data'] = {'CreateBucketConfiguration': {'LocationConstraint': kwargs['region']}}
+
+    params = _check_subresources(subresource, subresource_data)
+    params.update(_check_parameters(subresource_data[subresource].get('parameters', {}), **kwargs))
+    log.debug('salt/modules/s3:_put_bucket:\n\t\tparams: {0}'.format(params))
+    if subresource == '':    
+        del params['']
+    headers = _check_headers(subresource_data[subresource].get('headers', {}), **kwargs)
+    proto, endpoint, uri = _generate_proto_endpoint_uri(bucket=bucket, **kwargs)
     if subresource == 'policy':
-        data = kwargs['data']
+        data = kwargs.get('data', None)
     else:
         data = _generate_subresource_data(subresource,
                                           subresource_data[subresource]['body_root'],
-                                          kwargs['data'])
-    headers, requesturl = _generate_headers_requesturl('PUT', endpoint, uri, headers,
-                                                       params, data, prov_dict, role_arn)
+                                          kwargs.get('data', None))
+    log.debug('salt/modules/s3:_put_bucket:\n\t\tdata: {}'.format(data))
+    headers, requesturl = _generate_headers_request_url(
+            'PUT',
+            proto,
+            endpoint,
+            uri,
+            headers,
+            params,
+            data,
+            kwargs['region'],
+            kwargs['role_arn'],
+            kwargs['key'],
+            kwargs['keyid'])
 
-    log.debug('modules/s3:put: S3 Request: {0}'.format(requesturl))
-    log.debug('modules/s3:put: S3 Headers: {0}'.format(headers))
-    log.debug('modules/s3:put: S3 Params:  {0}'.format(params))
+    log.debug('modules/s3:put: S3 Request: {}'.format(requesturl))
+    log.debug('modules/s3:put: S3 Headers: {}'.format(headers))
+    log.debug('modules/s3:put: S3 Params:  {}'.format(params))
 
-    result = _do_request(method,
-                         request_url,
+    result = _do_request('PUT',
+                         requesturl,
                          headers=headers,
-                         verify=verify_ssl)
-    err = _result_error_check(result)
-    log.debug('modules/s3:put: S3 Response Status Code: {0}'.format(result.status_code))
+                         data=data,
+                         verify=kwargs['verify_ssl'])
+    err = _generic_result_error_check(result)
+    log.debug('modules/s3:_put_bucket:\n' +
+              '\t\tresult.status_code: {}\n'.format(result.status_code) +
+              '\t\tresult.text: {}'.format(result.text))
     if err:
-        raise CommandExecutionError('S3 PUT operation failed: {0}'.format(err))
+        return err
     if result.content:
         ret = xml.to_dict(result.content)
+    else:
+        ret = True
     return ret
 
 
@@ -310,7 +533,7 @@ def _get_defaults(**kwargs):
         key, keyid, kms_keyid, region, path_style, role_arn, service_url and verify_ssl.
     Modifies kwargs
     '''
-    ret = {}
+    ret = kwargs.copy()
     options = {'https_enable': ('s3.https_enable', True),
                'key': ('s3.key', salt.utils.aws.IROLE_CODE),
                'keyid': ('s3.keyid', salt.utils.aws.IROLE_CODE),
@@ -321,8 +544,8 @@ def _get_defaults(**kwargs):
                'service_url': ('s3.service_url', 's3.amazonaws.com'),
                'verify_ssl': ('s3.verify_ssl', True)}
     for item, value in six.iteritems(options):
-        kwargs[item] = __salt__['config.option'](value) if kwargs.get(item, None) is None else kwargs[item]
-    return kwargs
+        ret[item] = __salt__['config.option'](*value) if kwargs.get(item, None) is None else kwargs[item]
+    return ret
 
 
 def _do_request(method, url, **kwargs):
@@ -387,20 +610,36 @@ def _check_subresources(subresource, allowed_subresources):
     return params
 
 
-def _check_params(possible_params, **kwargs):
+def _check_parameters(possible_params, **kwargs):
     '''
     Check if the possible params are required and supplied.
     Returns a params-dict for all params supplied.
     Raises SaltInvocationError if a required parameter was not supplied or has no value.
     '''
-    params = {}
-    for param in possible_params:
-        if param and kwargs.get(param, None) is None:
-            raise SaltInvocationError('A required parameter {1} '.format(param) +
+    ret = {}
+    for param, required in six.iteritems(possible_params):
+        if required and kwargs.get(param, None) is None:
+            raise SaltInvocationError('A required parameter {0} '.format(param) +
                                       'was not supplied or was None')
         if param in kwargs:
-            params.update({param: kwargs[param]})
-    return params
+            ret.update({param: kwargs[param]})
+    return ret
+
+
+def _check_headers(headers, **kwargs):
+    '''
+    Checks if the required headers are present in kwargs.
+    Headers is a dict with the header as key, and its required status as value (bool).
+    Returns a dict with the headers and their data from kwargs.
+    '''
+    ret = {}
+    for header, required in six.iteritems(headers):
+        if required and kwargs.get(header, None) is None:
+            raise SaltInvocationError('A required header {0} '.format(header) +
+                                      'was not supplied or was none')
+        if header in kwargs:
+            ret.update({header: kwargs[header]})
+    return ret
 
 
 def _generate_subresource_data(subresource, subresource_body_root, data):
@@ -408,38 +647,50 @@ def _generate_subresource_data(subresource, subresource_body_root, data):
     Generates the data to be sent in the body of a PUT request with subresource.
     Returns string with data
     '''
-    if subresource_body_root is None:
+    if subresource_body_root is None or data is None:
         return ''
     root_node = ET.Element(subresource_body_root)
-    salt.utils.xmlutil.from_dict(root_node, data[root_tag])
-    return ET.tostring(root_node, encoding='UTF-8')
+    salt.utils.xmlutil.from_dict(root_node, data[subresource_body_root])
+    return ET.tostring(root_node)
 
 
-def _generate_endpoint_uri(service_url, region=None, bucket='', path='', path_style=False, **kwargs):
+def _generate_proto_endpoint_uri(service_url,
+                                 region=None,
+                                 bucket='',
+                                 path='',
+                                 path_style=False,
+                                 https_enable=True,
+                                 **kwargs):
     '''
     Returns the endpoint to use in the call to S3.
     The story on whether to use virtual-hosted-style or path-style URLs:
     http://docs.aws.amazon.com/AmazonS3/latest/dev/UsingBucket.html#access-bucket-intro
     '''
+    log.debug('salt/modules/s3: _generate_proto_endpoint_uri:\n' +
+              '\t\tservice_url: {}\n'.format(service_url) +
+              '\t\tregion: {}\n'.format(region) +
+              '\t\tbucket: {}\n'.format(bucket) +
+              '\t\tpath: {}'.format(path))
     endpoint = service_url
     uri = ''
     if service_url == 's3.amazonaws.com' and region:
-        endpoint = 's3-{0}.amazonaws.com'.format(region)
+        endpoint = 's3-{}.amazonaws.com'.format(region)
     if not bucket:
         return endpoint, '/'
     if path_style:
-        uri += '/{0}'.format(bucket)
+        uri += '/{}'.format(bucket)
     else:
-        endpoint = '{0}.{1}'.format(bucket, ret)
-    if path:
-        uri += '/{0}'.format(path)
-    return endpoint, uri
+        endpoint = '{0}.{1}'.format(bucket, endpoint)
+    uri += '/{}'.format(path)
+    proto = 'http{}://'.format('s' if https_enable else '')
+    return proto, endpoint, uri
 
 
-def _generate_headers_request_url(method, endpoint, uri, headers, params, data, prov_dict, role_arn):
+def _generate_headers_request_url(method, proto, endpoint, uri, headers, params, data, region, role_arn, key, keyid):
     '''
     Wrapper for getting the signed headers and request_url
     '''
+    log.debug('salt/modules/s3: _generate_headers_request_url: uri: {0}'.format(uri))
     return salt.utils.aws.sig4(
         method,
         endpoint,
@@ -450,45 +701,6 @@ def _generate_headers_request_url(method, endpoint, uri, headers, params, data, 
         role_arn=role_arn,
         region=region,
         product='s3',
-        requesturl='http{0}://{1}'.format('s' if kwargs['https_enable'] else '', endpoint),
+        requesturl=proto + endpoint,
         headers=headers
     )
-
-
-def _delete_bucket_object(bucket, objectname, **kwargs):
-    '''
-    Deletes an object from a bucket, or a subresource from an object in a bucket.
-    Raises CommandExecutionError on error
-    '''
-    kwargs = _get_defaults(**kwargs)
-    parameters = {'tagging': {}}
-    params = _check_subresources(subresource, parameters.keys())
-    params.update(_check_parameters(parameters[subresource], **kwargs))
-    endpoint = _generate_endpoint(bucket=bucket, **kwargs)
-
-    if not requesturl:
-        requesturl = (('https' if https_enable else 'http')+'://{0}/').format(endpoint)
-    headers, requesturl = salt.utils.aws.sig4(
-        'DELETE',
-        endpoint,
-        params,
-        uri='/',
-        prov_dict={'id': keyid, 'key': key},
-        role_arn=role_arn,
-        region=region,
-        product='s3',
-        requesturl=requesturl,
-        headers=headers or {},
-    )
-
-    log.debug('modules/s3:delete: S3 Request: {0}'.format(requesturl))
-    log.debug('modules/s3:delete: S3 Headers::')
-    log.debug('modules/s3:delete: Authorization: {0}'.format(headers['Authorization']))
-
-
-
-
-
-
-
-
