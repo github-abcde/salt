@@ -200,16 +200,16 @@ def get_bucket(name, subresource='', delimiter=None, encoding_type=None,
                 del kwargs[delete_this]
         try:
             result = salt.utils.s3.get_bucket(name,
-                                 subresource=subresource,
-                                 **kwargs)
+                                              subresource=subresource,
+                                              **kwargs)
             if 'start-after' in kwargs:
                 del kwargs['start-after']
             content_tag = list_base_tag[subresource]
             ret.extend(_parse_bucket_contents(result, content_tag))
             while result['IsTruncated'] == 'true' and _set_get_continuation(result, kwargs):
                 result = salt.utils.s3.get_bucket(name,
-                                     subresource=subresource,
-                                     **kwargs)
+                                                  subresource=subresource,
+                                                  **kwargs)
                 ret.extend(_parse_bucket_contents(result, content_tag))
         except CommandExecutionError as ex:
             log.error(__name__ + ':get_bucket:\n'
@@ -220,8 +220,8 @@ def get_bucket(name, subresource='', delimiter=None, encoding_type=None,
     else:
         try:
             result = salt.utils.s3.get_bucket(name,
-                                 subresource=subresource,
-                                 **kwargs)
+                                              subresource=subresource,
+                                              **kwargs)
             if subresource == 'tagging':
                 ret = _s3_tagging_to_dict(result)
             else:
@@ -340,10 +340,10 @@ def put_object(bucket, name, subresource='', local_file=None, **kwargs):
                                 if 'tags' in kwargs else kwargs.get('data', None)
     try:
         ret = salt.utils.s3.put_bucket_object(bucket,
-                                 name,
-                                 subresource=subresource,
-                                 local_file=local_file,
-                                 **new_kwargs)
+                                              name,
+                                              subresource=subresource,
+                                              local_file=local_file,
+                                              **new_kwargs)
     except CommandExecutionError as ex:
         log.error(__name__ + ':put_bucket_object:\n'
                   '\t\tError putting bucket: {}'.format(ex))
