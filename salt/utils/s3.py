@@ -12,11 +12,7 @@ import hashlib
 import base64
 
 # Import 3rd-party libs
-try:
-    import requests
-    HAS_REQUESTS = True  # pylint: disable=W0612
-except ImportError:
-    HAS_REQUESTS = False  # pylint: disable=W0612
+import requests
 
 # Import Salt libs
 import salt.utils
@@ -269,7 +265,6 @@ def get_bucket(bucket, subresource='', **kwargs):
     http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketGETversioningStatus.html
     http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketGETwebsite.html
     '''
-    log.debug('HERBERT: salt/modules/s3:_get_bucket: kwargs: {}'.format(kwargs))
     subresource_data = {'': {'parameters': {'delimiter': False, 'encoding-type': False,
                                             'max-keys': False, 'prefix': False,
                                             'list-type': True, 'continuation-token': False,

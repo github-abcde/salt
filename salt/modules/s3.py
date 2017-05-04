@@ -277,7 +277,6 @@ def get_object(bucket,
             if subresource not in ['', 'torrent']:
                 ret = xml.to_dict(ET.fromstring(ret))
                 if subresource == 'tagging':
-                    log.debug('HERBERT: ret: {}'.format(ret))
                     ret = _s3_tagging_to_dict(ret)
         else:
             ret = True
