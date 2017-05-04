@@ -9,18 +9,19 @@ Module for Amazon S3-services
 
        http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-roles-for-amazon-ec2.html
 
-    If IAM roles are not used you need to specify them either in a pillar or
-    in the minion's config file::
+    The AWS key and keyid will be retrieved from (in order):
+    - minion configuration file 's3.key' and 's3.keyid'
+    - pillar key 's3.key' and 's3.keyid'
+    - EC2 instance IAM role
+    - cloud-provider configuration file 'key' and 'id'
 
-        s3.keyid: GKTADJGHEIQSXMKKRBJ08H
-        s3.key: askdjghsdfjkghWupUjasdflkdfklgjsdfjajkghs
-
-    (Note: this is literally the pillar key 's3.keyid' or the config option 's3.keyid',
-      not a nested dict like:
-        s3:
-          keyid: GKTADJGHEIQSXMKKRBJ08H
-          key: askdjghsdfjkghWupUjasdflkdfklgjsdfjajkghs
-    )
+    AWS region will be retrieved from (in order):
+    - minion configuration file 's3.region'
+    - pillar key 's3.region'
+    - minion configuration file 'location'
+    - cloud-provider configuration file 'location'
+    - EC2 instance metadata
+    - default (us-east-1)
 
     A service_url may also be specified in the configuration::
 
@@ -29,18 +30,6 @@ Module for Amazon S3-services
     A role_arn may also be specified in the configuration::
 
         s3.role_arn: arn:aws:iam::111111111111:role/my-role-to-assume
-
-    AWS region may be specified in the configuration:
-
-        s3.region: eu-central-1
-
-    Default is us-east-1.
-
-    So concluding, in order of presedence, the key/keyid/region/role_arn credentials
-    will be retrieved from:
-    - pillar
-    - configuration options
-    - EC2 linked IAM role (via metadata URL http://169.254.169.254) (key/keyid/region)
 
     If a service_url is not specified, the default is s3.amazonaws.com. This
     may appear in various documentation as an "endpoint". A comprehensive list
@@ -75,8 +64,6 @@ from __future__ import absolute_import
 
 # Import Python libs
 import logging
-import hashlib
-import base64
 
 # Import 3rd-party libs
 try:
@@ -121,17 +108,36 @@ def delete_bucket(name, subresource='', configuration_id=None):
     return res
 
 
-def delete_bucket_object(bucket, name, subresource=''):
+def delete_bucket_object(bucket, name, subresource='', versionid=None):
     '''
     Deletes (the subresource of) an object in a bucket.
+    When deleting keys in a bucket, if you want to delete multiple objects, set
+    name to be a dict of key:versionid pairs. Versionid can be None.
+
+    CLI Example to delete a single file from a bucket:
+
+    .. code-block:: bash
+        salt myminion s3.delete_bucket_object bucket=mybucket name='foo'
+
+    CLI Example to delete a single file with a specific version from a bucket:
+
+    .. code-block:: bash
+        salt myminion s3.delete_bucket_object bucket=mybucket name='foo'
+        version_id=UIORUnfndfiufdisojhr398493jfdkjFJjkndnqUifhnw89493jJFJ
+
+    CLI Example to delete multiple files from a bucket:
+
+    .. code-block:: bash
+        salt myminion s3.delete_bucket_object bucket=mybucket name='{"foo":null, "bar":null}'
+
     '''
     res = False
-    kwargs = _get_defaults(**{})
+    kwargs = _get_defaults(**{'versionid': versionid})
     try:
         if isinstance(name, str):
             res = salt.utils.s3.delete_bucket_object(bucket, name, subresource=subresource, **kwargs)
-        elif isinstance(name, list) and subresource == '':
-            res = salt.utils.s3.delete_bucket_multiple_object(bucket, name, subresource='delete', **kwargs)
+        elif isinstance(name, dict) and subresource == '':
+            res = salt.utils.s3.delete_bucket_multiple_objects(bucket, name, subresource='delete', **kwargs)
     except CommandExecutionError as ex:
         log.error(__name__ + ':delete_bucket_object:\n'
                   'Error deleting {0}/{1}?{2}: {3}'.format(bucket, name, subresource, ex))
@@ -207,9 +213,10 @@ def get_bucket(name, subresource='', delimiter=None, encoding_type=None,
                 ret.extend(_parse_bucket_contents(result, content_tag))
         except CommandExecutionError as ex:
             log.error(__name__ + ':get_bucket:\n'
-                      '\t\tError retrieving contents of {0}?{1}: {2}'.format(name,
-                                                                             subresource,
-                                                                             ex))
+                      '\t\tError retrieving contents of {}{}{}: {}'.format(name,
+                                                                           '?' if subresource else '',
+                                                                           subresource,
+                                                                           ex))
     else:
         try:
             result = salt.utils.s3.get_bucket(name,
@@ -221,9 +228,10 @@ def get_bucket(name, subresource='', delimiter=None, encoding_type=None,
                 ret = result
         except CommandExecutionError as ex:
             log.error(__name__ + ':get_bucket:\n'
-                      '\t\tError retrieving contents of {0}?{1}: {2}'.format(name,
-                                                                             subresource,
-                                                                             ex))
+                      '\t\tError retrieving contents of {}{}{}: {}'.format(name,
+                                                                           '?' if subresource else '',
+                                                                           subresource,
+                                                                           ex))
     return ret
 
 
@@ -276,10 +284,11 @@ def get_bucket_object(bucket,
             ret = True
     except CommandExecutionError as ex:
         log.error(__name__ + ':get_bucket_object:\n'
-                  '\t\tError retrieving contents of {0}/{1}?{2}: {3}'.format(bucket,
-                                                                             name,
-                                                                             subresource,
-                                                                             ex))
+                  '\t\tError retrieving contents of {}/{}{}{}: {}'.format(bucket,
+                                                                          name,
+                                                                          '?' if subresource else '',
+                                                                          subresource,
+                                                                          ex))
     return ret
 
 
