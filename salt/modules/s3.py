@@ -228,10 +228,9 @@ def get_bucket(name, subresource='', delimiter=None, encoding_type=None,
                 ret = result
         except CommandExecutionError as ex:
             log.error(__name__ + ':get_bucket:\n'
-                      '\t\tError retrieving contents of {}{}{}: {}'.format(name,
-                                                                           '?' if subresource else '',
-                                                                           subresource,
-                                                                           ex))
+                      '\t\tError retrieving contents of {}?{}: {}'.format(name,
+                                                                          subresource,
+                                                                          ex))
     return ret
 
 
