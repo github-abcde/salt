@@ -154,7 +154,7 @@ def delete_bucket_multiple_objects(bucket, objects, **kwargs):
     Returns: None if all went well. List of keys with errors for the keys that
              failed to be deleted.
     '''
-    params = {'delete':''}
+    params = {'delete': ''}
     headers = _check_headers({'x-amz-mfa': False}, **kwargs)
     data = '<Delete><Quiet>true</Quiet>'
     for key, versionid in six.iteritems(objects):
@@ -635,17 +635,19 @@ def put_bucket_object(bucket, objectname, subresource='', local_file=None, **kwa
                                                         role_arn=kwargs['role_arn'],
                                                         key=kwargs['key'],
                                                         keyid=kwargs['keyid'])
-    try:
-        if subresource == '' and local_file is not None:
-            data = salt.utils.fopen(local_file, 'rb')
+    if subresource == '' and local_file is not None:
+        with salt.utils.fopen(local_file, 'rb') as filehandle:
+            result = _do_request('PUT',
+                                 requesturl,
+                                 headers=headers,
+                                 data=filehandle,
+                                 verify=kwargs['verify_ssl'])
+    else:
         result = _do_request('PUT',
                              requesturl,
                              headers=headers,
                              data=data,
                              verify=kwargs['verify_ssl'])
-    finally:
-        if subresource == '' and local_file is not None:
-            data.close()
 
     err = _generic_result_error_check(result)
     log.debug(__name__ + ':_put_bucket_object:\n'
