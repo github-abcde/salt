@@ -8,6 +8,8 @@ from __future__ import absolute_import
 
 # Import Python libs
 import logging
+import hashlib
+import base64
 
 # Import 3rd-party libs
 try:
@@ -103,7 +105,7 @@ def delete_bucket_object(bucket, objectname, subresource='', **kwargs):
     http://docs.aws.amazon.com/AmazonS3/latest/API/RESTObjectDELETE.html
     http://docs.aws.amazon.com/AmazonS3/latest/API/RESTObjectDELETEtagging.html
     '''
-    subresource_data = {'': {}, 'tagging': {}}
+    subresource_data = {'': {'parameters': {'versionid': False}, 'tagging': {}}}
     params = _check_subresources(subresource, subresource_data)
     params.update(_check_parameters(subresource_data.get(subresource, {}).get('parameters', {}), **kwargs))
     log.debug(__name__ + ':_delete_bucket_object:\n'
@@ -133,10 +135,67 @@ def delete_bucket_object(bucket, objectname, subresource='', **kwargs):
     err = _generic_result_error_check(result)
     log.debug(__name__ + ':_delete_bucket:\n' +
               '\t\tresult.status_code: {}\n'.format(result.status_code) +
+              '\t\tresult.headers: {}\n'.format(result.headers) +
               '\t\tresult.text: {}'.format(result.text))
     if err:
         raise CommandExecutionError('S3 DELETE operation failed: {0}'.format(err))
     return True
+
+
+def delete_bucket_multiple_objects(bucket, objects, **kwargs):
+    '''
+    The Multi-Object Delete operation enables you to delete multiple objects
+    from a bucket using a single HTTP request.
+
+    Arguments:
+    bucket: The name of the bucket to operate on
+    objects: A dict of key-value pairs with object-name:object-version.
+             The object-version may be None
+    Returns: None if all went well. List of keys with errors for the keys that
+             failed to be deleted.
+    '''
+    params = {'delete':''}
+    headers = _check_headers({'x-amz-mfa': False}, **kwargs)
+    data = '<Delete><Quiet>true</Quiet>'
+    for key, versionid in six.iteritems(objects):
+        data += '<Object><Key>{}</Key>'.format(key)
+        if versionid is not None:
+            data += '<VersionId>{}</VersionId>'.format(versionid)
+        data += '</Object>'
+    data += '</Delete>'
+    headers.update({'Content-MD5': base64.b64encode(hashlib.md5(data).digest())})
+    headers.update({'Content-Length': str(len(data))})
+    proto, endpoint, uri = _generate_proto_endpoint_uri(bucket=bucket,
+                                                        path='',
+                                                        **kwargs)
+    headers, requesturl = _generate_headers_request_url(method='POST',
+                                                        proto=proto,
+                                                        endpoint=endpoint,
+                                                        uri=uri,
+                                                        headers=headers,
+                                                        params=params,
+                                                        data=data,
+                                                        payload_hash=None,
+                                                        region=kwargs['region'],
+                                                        role_arn=kwargs['role_arn'],
+                                                        key=kwargs['key'],
+                                                        keyid=kwargs['keyid'])
+    log.debug(__name__ + ':_delete_bucket_multiple_objects:\n' +
+              '\t\trequesturl: {}\n'.format(requesturl) +
+              '\t\theaders: {}\n'.format(headers) +
+              '\t\tdata: {}'.format(data))
+    result = _do_request('POST',
+                         requesturl,
+                         headers=headers,
+                         data=data,
+                         verify=kwargs['verify_ssl'])
+    err = _generic_result_error_check(result)
+    log.debug(__name__ + ':_delete_bucket_multiple_objects:\n' +
+              '\t\tresult.status_code: {}\n'.format(result.status_code) +
+              '\t\tresult.text: {}'.format(result.text))
+    if err:
+        raise CommandExecutionError('S3 multiple delete operation failed: {}'.format(err))
+    return xml.to_dict(ET.fromstring(result.content))['DeleteResult']
 
 
 def list_buckets(**kwargs):
@@ -340,6 +399,8 @@ def get_bucket_object(bucket, objectname, subresource='', **kwargs):
     log.debug(__name__ + ':_get_bucket_object:\n'
               '\t\tresult.status_code: {}\n'.format(result.status_code) +
               '\t\tresult.headers: {}'.format(result.headers))
+    if result.status_code == 404 and result.headers.get('x-amz-delete-marker', False):
+        raise CommandExecutionError('File was deleted')
     if err:
         raise CommandExecutionError('S3 GET operation failed: {}'.format(err))
     return result
