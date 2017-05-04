@@ -20,249 +20,762 @@ except ImportError:
 import salt.utils
 import salt.utils.aws
 import salt.utils.xmlutil as xml
+from salt.ext import six
 from salt._compat import ElementTree as ET
-from salt.exceptions import CommandExecutionError
+from salt.exceptions import CommandExecutionError, SaltInvocationError
 
 log = logging.getLogger(__name__)
 
 
-def query(key, keyid, method='GET', params=None, headers=None,
-          requesturl=None, return_url=False, bucket=None, service_url=None,
-          path='', return_bin=False, action=None, local_file=None,
-          verify_ssl=True, full_headers=False, kms_keyid=None,
-          location=None, role_arn=None, chunk_size=16384, path_style=False,
-          https_enable=True):
+def delete_bucket(bucket, subresource='', **kwargs):
     '''
-    Perform a query against an S3-like API. This function requires that a
-    secret key and the id for that key are passed in. For instance:
-
-        s3.keyid: GKTADJGHEIQSXMKKRBJ08H
-        s3.key: askdjghsdfjkghWupUjasdflkdfklgjsdfjajkghs
-
-    If keyid or key is not specified, an attempt to fetch them from EC2 IAM
-    metadata service will be made.
-
-    A service_url may also be specified in the configuration:
-
-        s3.service_url: s3.amazonaws.com
-
-    If a service_url is not specified, the default is s3.amazonaws.com. This
-    may appear in various documentation as an "endpoint". A comprehensive list
-    for Amazon S3 may be found at::
-
-        http://docs.aws.amazon.com/general/latest/gr/rande.html#s3_region
-
-    The service_url will form the basis for the final endpoint that is used to
-    query the service.
-
-    Path style can be enabled:
-
-        s3.path_style: True
-
-    This can be useful if you need to use salt with a proxy for an s3 compatible storage
-
-    You can use either https protocol or http protocol:
-
-        s3.https_enable: True
-
-    SSL verification may also be turned off in the configuration:
-
-        s3.verify_ssl: False
-
-    This is required if using S3 bucket names that contain a period, as
-    these will not match Amazon's S3 wildcard certificates. Certificate
-    verification is enabled by default.
-
-    A region may be specified:
-
-        s3.location: eu-central-1
-
-    If region is not specified, an attempt to fetch the region from EC2 IAM
-    metadata service will be made. Failing that, default is us-east-1
+    Delete a bucket, or delete subresources of a bucket.
+    Returns: True on success
+    Exceptions: SaltInvocationError, CommandExecutionError
+    References:
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketDELETE.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketDELETEAnalyticsConfiguration.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketDELETEcors.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketDELETEInventoryConfiguration.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketDELETElifecycle.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTDeleteBucketMetricsConfiguration.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketDELETEpolicy.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketDELETEreplication.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketDELETEtagging.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketDELETEwebsite.html
     '''
-    if not HAS_REQUESTS:
-        log.error('There was an error: requests is required for s3 access')
-
-    if not headers:
-        headers = {}
-
-    if not params:
-        params = {}
-
-    if not service_url:
-        service_url = 's3.amazonaws.com'
-
-    if not bucket or path_style:
-        endpoint = service_url
+    subresource_data = {'': {},
+                        'analytics': {'parameters': {'configuration_id': True}},
+                        'cors': {},
+                        'inventory': {'parameters': {'configuration_id': True}},
+                        'lifecycle': {},
+                        'metrics': {'parameters': {'configuration_id': True}},
+                        'policy': {},
+                        'replication': {},
+                        'tagging': {},
+                        'website': {}}
+    params = _check_subresources(subresource, subresource_data)
+    params.update(_check_parameters(subresource_data.get(subresource, {}).get('parameters', {}), **kwargs))
+    log.debug(__name__ + ':_delete_bucket:\n'
+              '\t\tparams: {}'.format(params))
+    del params['']
+    # Rename configuration_id to id
+    if 'configuration_id' in params:
+        params['id'] = params.pop('configuration_id')
+    headers = _check_headers(subresource_data.get(subresource, {}).get('headers', {}), **kwargs)
+    proto, endpoint, uri = _generate_proto_endpoint_uri(bucket=bucket, **kwargs)
+    headers, requesturl = _generate_headers_request_url(method='DELETE',
+                                                        proto=proto,
+                                                        endpoint=endpoint,
+                                                        uri=uri,
+                                                        headers=headers,
+                                                        params=params,
+                                                        data='',
+                                                        payload_hash=None,
+                                                        region=kwargs['region'],
+                                                        role_arn=kwargs['role_arn'],
+                                                        key=kwargs['key'],
+                                                        keyid=kwargs['keyid'])
+    result = _do_request('DELETE',
+                         requesturl,
+                         headers=headers,
+                         verify=kwargs['verify_ssl'])
+    err = _generic_result_error_check(result)
+    log.debug(__name__ + ':_delete_bucket:\n'
+              '\t\tS3 Response Status Code: {}'.format(result.status_code))
+    if err:
+        raise CommandExecutionError('S3 DELETE operation failed: {0}'.format(err))
+    elif subresource:
+        log.debug(__name__ + ':_delete_bucket:\n'
+                  '\t\tRemoved {0} from bucket {1}'.format(subresource, bucket))
     else:
-        endpoint = '{0}.{1}'.format(bucket, service_url)
+        log.debug(__name__ + ':_delete_bucket:\n'
+                  '\t\tDeleted bucket {0}'.format(bucket))
+    return True
 
-    if path_style and bucket:
-        path = '{0}/{1}'.format(bucket, path)
 
-    # Try grabbing the credentials from the EC2 instance IAM metadata if available
-    if not key:
-        key = salt.utils.aws.IROLE_CODE
+def delete_bucket_object(bucket, objectname, subresource='', **kwargs):
+    '''
+    Deletes an object from a bucket, or a subresource from an object in a bucket.
+    Returns: True on success
+    Exceptions: CommandExecutionError
+    References:
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTObjectDELETE.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTObjectDELETEtagging.html
+    '''
+    subresource_data = {'': {}, 'tagging': {}}
+    params = _check_subresources(subresource, subresource_data)
+    params.update(_check_parameters(subresource_data.get(subresource, {}).get('parameters', {}), **kwargs))
+    log.debug(__name__ + ':_delete_bucket_object:\n'
+              '\t\tparams: {}'.format(params))
+    if subresource == '':
+        del params['']
+    headers = _check_headers(subresource_data.get(subresource, {}).get('headers', {}), **kwargs)
+    proto, endpoint, uri = _generate_proto_endpoint_uri(bucket=bucket,
+                                                        path=objectname,
+                                                        **kwargs)
+    headers, requesturl = _generate_headers_request_url(method='DELETE',
+                                                        proto=proto,
+                                                        endpoint=endpoint,
+                                                        uri=uri,
+                                                        headers=headers,
+                                                        params=params,
+                                                        data='',
+                                                        payload_hash=None,
+                                                        region=kwargs['region'],
+                                                        role_arn=kwargs['role_arn'],
+                                                        key=kwargs['key'],
+                                                        keyid=kwargs['keyid'])
+    result = _do_request('DELETE',
+                         requesturl,
+                         headers=headers,
+                         verify=kwargs['verify_ssl'])
+    err = _generic_result_error_check(result)
+    log.debug(__name__ + ':_delete_bucket:\n' +
+              '\t\tresult.status_code: {}\n'.format(result.status_code) +
+              '\t\tresult.text: {}'.format(result.text))
+    if err:
+        raise CommandExecutionError('S3 DELETE operation failed: {0}'.format(err))
+    return True
 
-    if not keyid:
-        keyid = salt.utils.aws.IROLE_CODE
 
-    if kms_keyid is not None and method in ('PUT', 'POST'):
-        headers['x-amz-server-side-encryption'] = 'aws:kms'
-        headers['x-amz-server-side-encryption-aws-kms-key-id'] = kms_keyid
+def list_buckets(**kwargs):
+    '''
+    Lists the buckets owned.
+    Returns: a dict with the owner 'name' and the 'buckets' list owned.
+    Each bucket is represented by a dict containing the 'Name' and the 'CreationDate' keys.
+    Exceptions: CommandExecutionError
+    References:
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTServiceGET.html
+    '''
+    proto, endpoint, uri = _generate_proto_endpoint_uri(**kwargs)
+    headers, requesturl = _generate_headers_request_url(method='GET',
+                                                        proto=proto,
+                                                        endpoint=endpoint,
+                                                        uri=uri,
+                                                        headers={},
+                                                        params={},
+                                                        data='',
+                                                        payload_hash=None,
+                                                        region=kwargs['region'],
+                                                        role_arn=kwargs['role_arn'],
+                                                        key=kwargs['key'],
+                                                        keyid=kwargs['keyid'])
+    result = _do_request('GET',
+                         requesturl,
+                         headers=headers,
+                         verify=kwargs['verify_ssl'])
+    err = _generic_result_error_check(result)
+    log.debug(__name__ + ':_list_buckets:\n'
+              '\t\tS3 Response Status Code: {}'.format(result.status_code))
+    if err:
+        raise CommandExecutionError('S3 list operation failed: {0}'.format(err))
+    if result.content:
+        log.debug(__name__ + ':_list_buckets:\n'
+                  '\t\tRESULT: {}'.format(result.content))
+        ret = {'buckets': []}
+        list_result = xml.to_dict(ET.fromstring(result.content))
+        ret.update({'owner': list_result['Owner']})
+        if 'Bucket' in list_result['Buckets']:
+            if isinstance(list_result['Buckets']['Bucket'], list):
+                for bucket in list_result['Buckets']['Bucket']:
+                    ret['buckets'].append(bucket)
+            else:
+                ret['buckets'].append(list_result['Buckets']['Bucket'])
+    return ret
 
-    if not location:
-        location = salt.utils.aws.get_location()
 
+def get_bucket(bucket, subresource='', **kwargs):
+    '''
+    List the contents of a bucket (up to 1000 objects) or get subresources of a bucket.
+    Returns: dict
+    Exceptions: CommandExecutionError
+    References:
+    http://docs.aws.amazon.com/AmazonS3/latest/API/v2-RESTBucketGET.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketGETaccelerate.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketGETacl.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketGETAnalyticsConfig.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketGETcors.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketGETInventoryConfig.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketGETlifecycle.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketGETlocation.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketGETlogging.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketGETMetricConfiguration.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketGETnotification.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketGETVersion.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketGETpolicy.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketGETreplication.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTrequestPaymentGET.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketGETtagging.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketGETversioningStatus.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketGETwebsite.html
+    '''
+    log.debug('HERBERT: salt/modules/s3:_get_bucket: kwargs: {}'.format(kwargs))
+    subresource_data = {'': {'parameters': {'delimiter': False, 'encoding-type': False,
+                                            'max-keys': False, 'prefix': False,
+                                            'list-type': True, 'continuation-token': False,
+                                            'fetch-owner': False, 'start-after': False}},
+                        'accelerate': {},
+                        'acl': {},
+                        'analytics': {'parameters': {'id': True}},
+                        'cors': {},
+                        'inventory': {'parameters': {'id': True}},
+                        'lifecycle': {},
+                        'location': {},
+                        'logging': {},
+                        'metrics': {'parameters': {'id': True}},
+                        'notification': {},
+                        'versions': {'parameters': {'delimiter': False, 'encoding-type': False,
+                                                    'key-marker': False, 'max-keys': False,
+                                                    'prefix': False, 'version-id-marker': False}},
+                        'policy': {},
+                        'replication': {},
+                        'requestPayment': {},
+                        'tagging': {},
+                        'uploads': {'parameters': {'delimiter': False, 'encoding-type': False,
+                                                   'max-uploads': False, 'key-marker': False,
+                                                   'prefix': False, 'upload-id-marker': False}},
+                        'versioning': {},
+                        'website': {}}
+    if subresource == '':
+        kwargs.update({'list-type': '2'})
+    params = _check_subresources(subresource, subresource_data)
+    params.update(_check_parameters(subresource_data.get(subresource, {}).get('parameters', {}), **kwargs))
+    log.debug(__name__ + ':_get_bucket:\n'
+              '\t\tparams: {}'.format(params))
+    if subresource == '':
+        del params['']
+    headers = _check_headers(subresource_data.get(subresource, {}).get('headers', {}), **kwargs)
+    proto, endpoint, uri = _generate_proto_endpoint_uri(bucket=bucket, **kwargs)
+    headers, requesturl = _generate_headers_request_url(method='GET',
+                                                        proto=proto,
+                                                        endpoint=endpoint,
+                                                        uri=uri,
+                                                        headers=headers,
+                                                        params=params,
+                                                        data='',
+                                                        payload_hash=None,
+                                                        region=kwargs['region'],
+                                                        role_arn=kwargs['role_arn'],
+                                                        key=kwargs['key'],
+                                                        keyid=kwargs['keyid'])
+    result = _do_request('GET',
+                         requesturl,
+                         headers=headers,
+                         verify=kwargs['verify_ssl'])
+    err = _generic_result_error_check(result)
+    log.debug(__name__ + ':_get_bucket:\n'
+              '\t\tresult.status_code: {}\n'.format(result.status_code) +
+              '\t\tresult.text: {}'.format(result.text))
+    if err:
+        raise CommandExecutionError('S3 GET operation failed: {0}'.format(err))
+    if result.content:
+        ret = xml.to_dict(ET.fromstring(result.content))
+    else:
+        ret = True
+    return ret
+
+
+def get_bucket_object(bucket, objectname, subresource='', **kwargs):
+    '''
+    Gets (subresource of) object at path in bucket.
+    Returns: request object
+    Exceptions: CommandExecutionError
+    References:
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTObjectGET.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTObjectGETacl.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTObjectGETtagging.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTObjectGETtorrent.html
+    '''
+    request_kwargs = {}
+    log.debug(__name__ + ':_get_bucket_object:\n'
+              '\t\tkwargs: {}'.format(kwargs))
+    subresource_data = {'': {'parameters': {'response-content-type': False,
+                                            'response-content-language': False,
+                                            'response-expires': False,
+                                            'response-cache-control': False,
+                                            'response-content-disposition': False,
+                                            'response-content-encoding': False},
+                             'headers': {'Range': False, 'If-Modified-Since': False,
+                                         'If-Unmodified-Since': False, 'If-Match': False,
+                                         'If-None-Match': False,
+                                         'x-amz-server-side-encryption-customer-algorithm': False,
+                                         'x-amz-server-side-encryption-customer-key': False,
+                                         'x-amz-server-side-encryption-customer-key-MD5': False}},
+                        'acl': {'parameters': {'versionId': False}, 'headers': {}},
+                        'tagging': {'parameters': {}, 'headers': {}},
+                        'torrent': {'parameters': {}, 'headers': {}}}
+    params = _check_subresources(subresource, subresource_data)
+    headers = _check_headers(subresource_data.get(subresource, {}).get('headers', {}), **kwargs)
+    params.update(_check_parameters(subresource_data.get(subresource, {}).get('parameters', {}), **kwargs))
+    log.debug(__name__ + ':_get_bucket_object:\n'
+              '\t\tparams: {}'.format(params))
+    if subresource == '':
+        del params['']
+    proto, endpoint, uri = _generate_proto_endpoint_uri(bucket=bucket,
+                                                        path=objectname,
+                                                        **kwargs)
+    headers, requesturl = _generate_headers_request_url(method='GET',
+                                                        proto=proto,
+                                                        endpoint=endpoint,
+                                                        uri=uri,
+                                                        headers=headers,
+                                                        params=params,
+                                                        data='',
+                                                        payload_hash=None,
+                                                        region=kwargs['region'],
+                                                        role_arn=kwargs['role_arn'],
+                                                        key=kwargs['key'],
+                                                        keyid=kwargs['keyid'])
+    if subresource != '' and requesturl.endswith('='):
+        requesturl = requesturl[:-1]
+    if subresource == '':
+        request_kwargs['stream'] = True
+    result = _do_request('GET',
+                         requesturl,
+                         headers=headers,
+                         verify=kwargs['verify_ssl'],
+                         **request_kwargs)
+    err = _generic_result_error_check(result)
+    log.debug(__name__ + ':_get_bucket_object:\n'
+              '\t\tresult.status_code: {}\n'.format(result.status_code) +
+              '\t\tresult.headers: {}'.format(result.headers))
+    if err:
+        raise CommandExecutionError('S3 GET operation failed: {}'.format(err))
+    return result
+
+
+def head_bucket(bucket, **kwargs):
+    '''
+    Checks if a bucket exists and you have permission to access it.
+    Returns: True if the bucket exists and there are enough permissions to access it.
+    Exceptions: CommandExecutionError
+    References:
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketHEAD.html
+    '''
+    proto, endpoint, uri = _generate_proto_endpoint_uri(bucket=bucket, **kwargs)
+    headers, requesturl = _generate_headers_request_url(method='HEAD',
+                                                        proto=proto,
+                                                        endpoint=endpoint,
+                                                        uri=uri,
+                                                        headers={},
+                                                        params={},
+                                                        data='',
+                                                        payload_hash=None,
+                                                        region=kwargs['region'],
+                                                        role_arn=kwargs['role_arn'],
+                                                        key=kwargs['key'],
+                                                        keyid=kwargs['keyid'])
+    result = _do_request('HEAD',
+                         requesturl,
+                         headers=headers,
+                         verify=kwargs['verify_ssl'])
+    err = _generic_result_error_check(result)
+    log.debug(__name__ + ':_head_bucket:\n'
+              '\t\tS3 Response Status Code: {}'.format(result.status_code))
+    if err:
+        raise CommandExecutionError('S3 HEAD operation failed: {}'.format(err))
+    return True
+
+
+def put_bucket(bucket, subresource='', **kwargs):
+    '''
+    Creates a new S3 bucket, or modifies the subresource configuration.
+    See also: http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketPUT.html
+    Generates headers as required.
+    Returns: dict or boolean depending on whether the PUT-request returns data or not
+    Exceptions: CommandExecutionError
+    References:
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketPUT.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketPUTaccelerate.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketPUTacl.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketPUTAnalyticsConfig.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketPUTcors.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketPUTInventoryConfig.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketPUTlifecycle.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketPUTlogging.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketPUTMetricConfiguration.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketPUTnotification.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketPUTpolicy.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketPUTreplication.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTrequestPaymentPUT.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketPUTtagging.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketPUTVersioningStatus.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTBucketPUTwebsite.html
+    '''
+    log.debug('salt/modules/s3:_put_bucket:\n'
+              '\t\tkwargs: {}'.format(kwargs))
+    subresource_data = {'': {'headers': {'x-amz-acl': False, 'x-amz-grant-read': False,
+                                         'x-amz-grant-write': False, 'x-amz-grant-read-acp': False,
+                                         'x-amz-grant-write-acp': False, 'x-amz-grant-full-control': False},
+                             'parameters': {}, 'body_root': 'CreateBucketConfiguration'},
+                        'accelerate': {'headers': {}, 'parameters': {},
+                                       'body_root': 'AccelerateConfiguration'},
+                        'acl': {'headers': {'x-amz-acl': False, 'x-amz-grant-read': False,
+                                            'x-amz-grant-write': False, 'x-amz-grant-read-acp': False,
+                                            'x-amz-grant-write-acp': False, 'x-amz-grant-full-control': False},
+                                'parameters': {}, 'body_root': 'AccessControlPolicy'},
+                        'analytics': {'headers': {}, 'parameters': {'id': True},
+                                      'body_root': 'AnalyticsConfiguration'},
+                        'cors': {'headers': {'Content-MD5': True}, 'parameters': {},
+                                 'body_root': 'CORSConfiguration'},
+                        'inventory': {'headers': {}, 'parameters': {'id': True},
+                                      'body_root': 'InventoryConfiguration'},
+                        'lifecycle': {'headers': {'Content-MD5': True}, 'parameters': {},
+                                      'body_root': 'LifecycleConfiguration'},
+                        'logging': {'headers': {}, 'parameters': {},
+                                    'body_root': 'BucketLoggingStatus'},
+                        'metrics': {'headers': {}, 'parameters': {'id': True},
+                                    'body_root': 'MetricsConfiguration'},
+                        'notification': {'headers': {}, 'parameters': {},
+                                         'body_root': 'NotificationConfiguration'},
+                        'policy': {'headers': {}, 'parameters': {}, 'body_root': None},
+                        'replication': {'headers': {'Content-MD5': True}, 'parameters': {},
+                                        'body_root': 'ReplicationConfiguration'},
+                        'requestPayment': {'headers': {}, 'parameters': {},
+                                           'body_root': 'RequestPaymentConfiguration'},
+                        'tagging': {'headers': {'Content-MD5': False}, 'parameters': {},
+                                    'body_root': 'Tagging'},
+                        'versioning': {'headers': {'x-amz-mfa': False}, 'parameters': {},
+                                       'body_root': 'VersioningConfiguration'},
+                        'website': {'headers': {}, 'parameters': {},
+                                    'body_root': 'WebsiteConfiguration'}}
+    if kwargs['region'] is not None and subresource == '' and kwargs.get('data', None) is None:
+        kwargs['data'] = {'CreateBucketConfiguration': {'LocationConstraint': kwargs['region']}}
+
+    params = _check_subresources(subresource, subresource_data)
+    params.update(_check_parameters(subresource_data.get(subresource, {}).get('parameters', {}), **kwargs))
+    log.debug(__name__ + ':_put_bucket:\n'
+              '\t\tparams: {}'.format(params))
+    if subresource == '':
+        del params['']
+    headers = _check_headers(subresource_data.get(subresource, {}).get('headers', {}), **kwargs)
+    proto, endpoint, uri = _generate_proto_endpoint_uri(bucket=bucket, **kwargs)
+    if subresource == 'policy':
+        data = kwargs.get('data', None)
+    else:
+        data = _generate_subresource_data(subresource,
+                                          subresource_data.get(subresource, {}).get('body_root', None),
+                                          kwargs.get('data', None))
+        headers.update({'Content-MD5': base64.b64encode(hashlib.md5(data).digest())})
+    log.debug(__name__ + ':_put_bucket:\n'
+              '\t\tdata: {}'.format(data))
+    headers, requesturl = _generate_headers_request_url(method='PUT',
+                                                        proto=proto,
+                                                        endpoint=endpoint,
+                                                        uri=uri,
+                                                        headers=headers,
+                                                        params=params,
+                                                        data=data,
+                                                        payload_hash=None,
+                                                        region=kwargs['region'],
+                                                        role_arn=kwargs['role_arn'],
+                                                        key=kwargs['key'],
+                                                        keyid=kwargs['keyid'])
+    result = _do_request('PUT',
+                         requesturl,
+                         headers=headers,
+                         data=data,
+                         verify=kwargs['verify_ssl'])
+    err = _generic_result_error_check(result)
+    log.debug(__name__ + ':_put_bucket:\n'
+              '\t\tresult.status_code: {}\n'.format(result.status_code) +
+              '\t\tresult.text: {}'.format(result.text))
+    if err:
+        raise CommandExecutionError('S3 PUT operation failed: {}'.format(err))
+    if result.content:
+        ret = xml.to_dict(result.content)
+    else:
+        ret = True
+    return ret
+
+
+def put_bucket_object(bucket, objectname, subresource='', local_file=None, **kwargs):
+    '''
+    Puts an object in a bucket or puts a configuration in a subresource of an object in a bucket.
+    Header values can be passed as kwargs.
+    Params can be passed as kwargs.
+    Returns: dict or boolean depending on whether the PUT-request returns data or not
+    Exceptions: CommandExecutionError
+    References:
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTObjectPUT.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTObjectCOPY.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTObjectPUTacl.html
+    http://docs.aws.amazon.com/AmazonS3/latest/API/RESTObjectPUTtagging.html
+    '''
+    log.debug(__name__ + ':_put_bucket_object:\n'
+              '\t\tkwargs: {}'.format(kwargs))
+    subresource_data = {'': {'headers': {'Cache-Control': False, 'Content-Disposition': False,
+                                         'Content-Encoding': False, 'Content-Length': False,
+                                         'Content-MD5': False, 'Content-Type': False,
+                                         'Expect': False, 'Expires': False,
+                                         'x-amz-meta-': False, 'x-amz-storage-class': False,
+                                         'x-amz-tagging': False, 'x-amz-website-redirect-location': False,
+                                         'x-amz-acl': False, 'x-amz-grant-read': False,
+                                         'x-amz-grant-write': False, 'x-amz-grant-read-acp': False,
+                                         'x-amx-grant-write-acp': False, 'x-amz-grant-full-control': False,
+                                         'x-amz-server-side-encryption': False,
+                                         'x-amz-amz-server-side-encryption-aws-kms-key-id': False,
+                                         'x-amz-server-side-encryption-context': False,
+                                         'x-amz-server-side-encryption-customer-algorithm': False,
+                                         'x-amz-server-side-encryption-customer-key': False,
+                                         'x-amz-server-side-encryption-customer-key-MD5': False,
+                                         'x-amz-copy-source': False, 'x-amz-metadata-directive': False,
+                                         'x-amz-copy-source-if-match': False,
+                                         'x-amz-copy-source-if-none-match': False,
+                                         'x-amz-copy-source-if-unmodified-since': False,
+                                         'x-amz-copy-source-if-modified-since': False,
+                                         'x-amz-tagging-directive': False},
+                             'parameters': {}},
+                        'acl': {'headers': {'x-amz-acl': False, 'x-amz-grant-read': False,
+                                            'x-amz-grant-write': False, 'x-amz-grant-read-acp': False,
+                                            'x-amz-grant-write-acp': False, 'x-amz-grant-full-control': False},
+                                'parameters': {},
+                                'body_root': 'AccessControlPolicy'},
+                        'tagging': {'headers': {'Content-MD5': False},
+                                    # Acutally, Content-MD5 is required, but we're calculating it here.
+                                    'parameters': {}, 'body_root': 'Tagging'}}
+    headers = _check_headers(subresource_data.get(subresource, {}).get('headers', {}), **kwargs)
+    params = _check_subresources(subresource, subresource_data)
+    params.update(_check_parameters(subresource_data.get(subresource, {}).get('parameters', {}), **kwargs))
+    log.debug(__name__ + ':_put_bucket_object:\n'
+              '\t\tparams: {}'.format(params))
+    if subresource == '':
+        del params['']
+    # Unfortunately, requests-lib will likely never support 100-Expects
+    # https://github.com/kennethreitz/requests/issues/713
+    proto, endpoint, uri = _generate_proto_endpoint_uri(bucket=bucket, path=objectname, **kwargs)
     data = ''
     payload_hash = None
-    if method == 'PUT':
-        if local_file:
+    if subresource == '':
+        if local_file is not None:
             payload_hash = salt.utils.get_hash(local_file, form='sha256')
-
-    if path is None:
-        path = ''
-
-    if not requesturl:
-        requesturl = (('https' if https_enable else 'http')+'://{0}/{1}').format(endpoint, path)
-        headers, requesturl = salt.utils.aws.sig4(
-            method,
-            endpoint,
-            params,
-            data=data,
-            uri='/{0}'.format(path),
-            prov_dict={'id': keyid, 'key': key},
-            role_arn=role_arn,
-            location=location,
-            product='s3',
-            requesturl=requesturl,
-            headers=headers,
-            payload_hash=payload_hash,
-        )
-
-    log.debug('S3 Request: {0}'.format(requesturl))
-    log.debug('S3 Headers::')
-    log.debug('    Authorization: {0}'.format(headers['Authorization']))
-
-    if not data:
-        data = None
-
-    try:
-        if method == 'PUT':
-            if local_file:
-                data = salt.utils.fopen(local_file, 'r')  # pylint: disable=resource-leakage
-            result = requests.request(method,
-                                      requesturl,
-                                      headers=headers,
-                                      data=data,
-                                      verify=verify_ssl,
-                                      stream=True)
-        elif method == 'GET' and local_file and not return_bin:
-            result = requests.request(method,
-                                      requesturl,
-                                      headers=headers,
-                                      data=data,
-                                      verify=verify_ssl,
-                                      stream=True)
+        elif kwargs.get('data', None) is not None:
+            data = kwargs['data']
+            # Payload hash will be calculated by salt.utils.aws.sig4
         else:
-            result = requests.request(method,
-                                      requesturl,
-                                      headers=headers,
-                                      data=data,
-                                      verify=verify_ssl)
+            raise SaltInvocationError('No data or local file given to put.')
+    else:
+        data = _generate_subresource_data(subresource,
+                                          subresource_data[subresource]['body_root'],
+                                          kwargs.get('data', None))
+        headers.update({'Content-MD5': base64.b64encode(hashlib.md5(data).digest())})
+        log.debug(__name__ + ':_put_bucket_object:\n'
+                  '\t\tdata: {}'.format(data))
+    headers, requesturl = _generate_headers_request_url(method='PUT',
+                                                        proto=proto,
+                                                        endpoint=endpoint,
+                                                        uri=uri,
+                                                        headers=headers,
+                                                        params=params,
+                                                        data=data,
+                                                        payload_hash=payload_hash,
+                                                        region=kwargs['region'],
+                                                        role_arn=kwargs['role_arn'],
+                                                        key=kwargs['key'],
+                                                        keyid=kwargs['keyid'])
+    try:
+        if subresource == '' and local_file is not None:
+            data = salt.utils.fopen(local_file, 'rb')
+        result = _do_request('PUT',
+                             requesturl,
+                             headers=headers,
+                             data=data,
+                             verify=kwargs['verify_ssl'])
     finally:
-        if data is not None:
+        if subresource == '' and local_file is not None:
             data.close()
 
-    err_code = None
-    err_msg = None
+    err = _generic_result_error_check(result)
+    log.debug(__name__ + ':_put_bucket_object:\n'
+              '\t\tresult.status_code: {}\n'.format(result.status_code) +
+              '\t\tresult.text: {}'.format(result.text))
+    if err:
+        return err
+    if result.content:
+        ret = xml.to_dict(result.content)
+    else:
+        ret = True
+    return ret
+
+
+def _do_request(method, url, **kwargs):
+    '''
+    Wrapper for requests in order to fix dropping the Authorization-header
+    on 307-redirects to different hosts. Which is the case for a redirect
+    from:
+        https://<bucketname>.s3.amazonaws.com
+    to:
+        https://<bucketname>.s3-<region>.amazonaws.com
+    See also https://github.com/kennethreitz/requests/issues/2949
+    '''
+    log.debug(__name__ + ': _do_request:\n' +
+              'method: {}\n'.format(method) +
+              'url: {}\n'.format(url) +
+              'kwargs: {}'.format(kwargs))
+    result = requests.request(method,
+                              url,
+                              allow_redirects=False,
+                              **kwargs)
+    if result.status_code in [301, 302, 307, 308]:
+        result = requests.request(method,
+                                  result.headers['Location'],
+                                  allow_redirects=False,
+                                  **kwargs)
+    return result
+
+
+def _generic_result_error_check(result):
+    '''
+    Generic function to extract error-data from result.
+    Returns a dict, empty if there was no error.
+    If there was an error, and the API response is parsable,
+    the dict will contain:
+      code, message, request_id, resource
+    otherwise only code (with the HTTP statuscode) and
+    message (with the full API response) will be present.
+    '''
+    ret = {}
     if result.status_code >= 400:
         # On error the S3 API response should contain error message
         err_text = result.content or 'Unknown error'
-        log.debug('    Response content: {0}'.format(err_text))
-
+        log.debug(__name__ + ':_generic_result_error_check: Response content: {0}'.format(err_text))
         # Try to get err info from response xml
         try:
             err_data = xml.to_dict(ET.fromstring(err_text))
-            err_code = err_data['Code']
-            err_msg = err_data['Message']
+            ret = {key.lower(): value for key, value in six.iteritems(err_data)}
         except (KeyError, ET.ParseError) as err:
-            log.debug('Failed to parse s3 err response. {0}: {1}'.format(
-                type(err).__name__, err))
-            err_code = 'http-{0}'.format(result.status_code)
-            err_msg = err_text
-
-    log.debug('S3 Response Status Code: {0}'.format(result.status_code))
-
-    if method == 'PUT':
-        if result.status_code != 200:
-            if local_file:
-                raise CommandExecutionError(
-                    'Failed to upload from {0} to {1}. {2}: {3}'.format(
-                        local_file, path, err_code, err_msg))
-            raise CommandExecutionError(
-                'Failed to create bucket {0}. {1}: {2}'.format(
-                    bucket, err_code, err_msg))
-
-        if local_file:
-            log.debug('Uploaded from {0} to {1}'.format(local_file, path))
-        else:
-            log.debug('Created bucket {0}'.format(bucket))
-        return
-
-    if method == 'DELETE':
-        if not str(result.status_code).startswith('2'):
-            if path:
-                raise CommandExecutionError(
-                    'Failed to delete {0} from bucket {1}. {2}: {3}'.format(
-                        path, bucket, err_code, err_msg))
-            raise CommandExecutionError(
-                'Failed to delete bucket {0}. {1}: {2}'.format(
-                    bucket, err_code, err_msg))
-
-        if path:
-            log.debug('Deleted {0} from bucket {1}'.format(path, bucket))
-        else:
-            log.debug('Deleted bucket {0}'.format(bucket))
-        return
-
-    # This can be used to save a binary object to disk
-    if local_file and method == 'GET':
-        if result.status_code < 200 or result.status_code >= 300:
-            raise CommandExecutionError(
-                'Failed to get file. {0}: {1}'.format(err_code, err_msg))
-
-        log.debug('Saving to local file: {0}'.format(local_file))
-        with salt.utils.fopen(local_file, 'wb') as out:
-            for chunk in result.iter_content(chunk_size=chunk_size):
-                out.write(chunk)
-        return 'Saved to local file: {0}'.format(local_file)
-
-    if result.status_code < 200 or result.status_code >= 300:
-        raise CommandExecutionError(
-            'Failed s3 operation. {0}: {1}'.format(err_code, err_msg))
-
-    # This can be used to return a binary object wholesale
-    if return_bin:
-        return result.content
-
-    if result.content:
-        items = ET.fromstring(result.content)
-
-        ret = []
-        for item in items:
-            ret.append(xml.to_dict(item))
-
-        if return_url is True:
-            return ret, requesturl
-    else:
-        if result.status_code != requests.codes.ok:
-            return
-        ret = {'headers': []}
-        if full_headers:
-            ret['headers'] = dict(result.headers)
-        else:
-            for header in result.headers:
-                ret['headers'].append(header.strip())
-
+            log.debug(__name__ + ':_generic_result_error_check: ' +
+                      'Failed to parse s3 err response. ' +
+                      '{0}: {1}\n'.format(type(err).__name__, err))
+            ret.update({'code': 'http-{0}'.format(result.status_code),
+                        'message': err_text})
     return ret
+
+
+def _check_subresources(subresource, allowed_subresources):
+    '''
+    Checks if the specified subresource is allowed.
+    Returns params dict for the subresource or raises SaltInvocationError.
+    '''
+    if subresource is not None and subresource not in allowed_subresources.keys():
+        raise SaltInvocationError('Invalid subresource specified: {0}.\n'.format(subresource) +
+                                  'Valid subresources are: {0}'.format(allowed_subresources.keys()))
+    params = {subresource: ''} if subresource is not None else {}
+    return params
+
+
+def _check_parameters(possible_params, **kwargs):
+    '''
+    Check if the possible params are required and supplied.
+    Returns a params-dict for all params supplied.
+    Raises SaltInvocationError if a required parameter was not supplied or has no value.
+    '''
+    ret = {}
+    for param, required in six.iteritems(possible_params):
+        if required and kwargs.get(param, None) is None:
+            raise SaltInvocationError('A required parameter {0} '.format(param) +
+                                      'was not supplied or was None')
+        if param in kwargs:
+            ret.update({param: kwargs[param]})
+    return ret
+
+
+def _check_headers(headers, **kwargs):
+    '''
+    Checks if the required headers are present in kwargs.
+    Headers is a dict with the header as key, and its required status as value (bool).
+    Returns a dict with the headers and their data from kwargs.
+    '''
+    ret = {}
+    for header, required in six.iteritems(headers):
+        if required and kwargs.get(header, None) is None:
+            raise SaltInvocationError('A required header {0} '.format(header) +
+                                      'was not supplied or was none')
+        if header in kwargs:
+            ret.update({header: kwargs[header]})
+    return ret
+
+
+def _generate_subresource_data(subresource, subresource_body_root, data):
+    '''
+    Generates the data to be sent in the body of a PUT request with subresource.
+    Returns string with data
+    '''
+    if subresource_body_root is None or data is None:
+        return ''
+    if not isinstance(data, dict):
+        raise SaltInvocationError('Data passed for subresource is not a dict: {}'.format(data))
+    if subresource_body_root not in data:
+        raise SaltInvocationError('Data passed for subresource does not have '
+                                  'required root element {}'.format(subresource_body_root))
+    root_node = ET.Element(subresource_body_root)
+    salt.utils.xmlutil.from_dict(root_node, data[subresource_body_root])
+    return ET.tostring(root_node)
+
+
+def _generate_proto_endpoint_uri(service_url='s3.amazonaws.com',
+                                 region=None,
+                                 bucket='',
+                                 path='',
+                                 path_style=False,
+                                 https_enable=True,
+                                 **kwargs):
+    '''
+    Returns the endpoint to use in the call to S3.
+    The story on whether to use virtual-hosted-style or path-style URLs:
+    http://docs.aws.amazon.com/AmazonS3/latest/dev/UsingBucket.html#access-bucket-intro
+    '''
+    log.debug(__name__ + ':_generate_proto_endpoint_uri:\n' +
+              '\t\tservice_url: {}\n'.format(service_url) +
+              '\t\tregion: {}\n'.format(region) +
+              '\t\tbucket: {}\n'.format(bucket) +
+              '\t\tpath: {}'.format(path))
+    endpoint = service_url
+    uri = ''
+    proto = 'http{}://'.format('s' if https_enable else '')
+    if service_url == 's3.amazonaws.com' and region:
+        endpoint = 's3-{}.amazonaws.com'.format(region)
+    if not bucket:
+        return proto, endpoint, '/'
+    if path_style:
+        uri += '/{}'.format(bucket)
+    else:
+        endpoint = '{0}.{1}'.format(bucket, endpoint)
+    uri += '/{}'.format(path)
+    log.debug(__name__ + ':_generate_proto_endpoint_uri:\n' +
+              'proto: {}\n'.format(proto) +
+              'endpoint: {}\n'.format(endpoint) +
+              'uri: {}'.format(uri))
+    return proto, endpoint, uri
+
+
+def _generate_headers_request_url(method,
+                                  proto,
+                                  endpoint,
+                                  uri,
+                                  headers,
+                                  params,
+                                  data,
+                                  payload_hash,
+                                  region,
+                                  role_arn,
+                                  key,
+                                  keyid):
+    '''
+    Wrapper for getting the signed headers and request_url with all params explicitly required
+    '''
+    return salt.utils.aws.sig4(
+        method,
+        endpoint,
+        params,
+        data=data,
+        payload_hash=payload_hash,
+        uri=uri,
+        prov_dict={'id': keyid, 'key': key},
+        role_arn=role_arn,
+        location=region,
+        product='s3',
+        requesturl=proto + endpoint,
+        headers=headers
+    )

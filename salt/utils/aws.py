@@ -37,7 +37,7 @@ from salt.ext.six.moves.urllib.parse import urlencode, urlparse
 # pylint: enable=import-error,redefined-builtin,no-name-in-module
 
 LOG = logging.getLogger(__name__)
-DEFAULT_REGION = 'us-east-1'
+DEFAULT_LOCATION = 'us-east-1'
 DEFAULT_AWS_API_VERSION = '2014-10-01'
 AWS_RETRY_CODES = [
     'RequestLimitExceeded',
@@ -54,7 +54,7 @@ __AccessKeyId__ = ''
 __SecretAccessKey__ = ''
 __Token__ = ''
 __Expiration__ = ''
-__Region__ = ''
+__Location__ = ''
 __AssumeCache__ = {}
 
 
@@ -152,7 +152,7 @@ def sig2(method, endpoint, params, provider, aws_api_version):
     return params_with_headers
 
 
-def assumed_creds(prov_dict, role_arn, region=None):
+def assumed_creds(prov_dict, role_arn, location=None):
     valid_session_name_re = re.compile("[^a-z0-9A-Z+=,.@-]")
 
     # current time in epoch seconds
@@ -185,7 +185,7 @@ def assumed_creds(prov_dict, role_arn, region=None):
         uri='/',
         prov_dict=prov_dict,
         product='sts',
-        region=region,
+        location=location,
         requesturl="https://sts.amazonaws.com/"
     )
     headers["Accept"] = "application/json"
@@ -204,7 +204,7 @@ def assumed_creds(prov_dict, role_arn, region=None):
 
 
 def sig4(method, endpoint, params, prov_dict,
-         aws_api_version=DEFAULT_AWS_API_VERSION, region=None,
+         aws_api_version=DEFAULT_AWS_API_VERSION, location=None,
          product='ec2', uri='/', requesturl=None, data='', headers=None,
          role_arn=None, payload_hash=None):
     '''
@@ -221,12 +221,12 @@ def sig4(method, endpoint, params, prov_dict,
     if role_arn is None:
         access_key_id, secret_access_key, token = creds(prov_dict)
     else:
-        access_key_id, secret_access_key, token = assumed_creds(prov_dict, role_arn, region=region)
+        access_key_id, secret_access_key, token = assumed_creds(prov_dict, role_arn, location=location)
 
-    if region is None:
-        region = get_region_from_metadata()
-    if region is None:
-        region = DEFAULT_REGION
+    if location is None:
+        location = get_region_from_metadata()
+    if location is None:
+        location = DEFAULT_LOCATION
 
     params_with_headers = params.copy()
     if product not in ('s3', 'ssm'):
@@ -273,10 +273,9 @@ def sig4(method, endpoint, params, prov_dict,
         signed_headers,
         payload_hash
     ))
-    LOG.debug('salt/utils/aws: sig4:\n\t\tcanonical_request: {0}'.format(canonical_request))
 
     # Create the string to sign
-    credential_scope = '/'.join((datestamp, region, product, 'aws4_request'))
+    credential_scope = '/'.join((datestamp, location, product, 'aws4_request'))
     string_to_sign = '\n'.join((
         algorithm,
         amzdate,
@@ -288,7 +287,7 @@ def sig4(method, endpoint, params, prov_dict,
     signing_key = _sig_key(
         secret_access_key,
         datestamp,
-        region,
+        location,
         product
     )
 
@@ -311,7 +310,7 @@ def sig4(method, endpoint, params, prov_dict,
 
     new_headers['Authorization'] = authorization_header
 
-    requesturl = '{0}?{1}'.format(requesturl, querystring)
+    requesturl = '{0}{1}{2}?{3}'.format(requesturl, '' if uri[0] == '/' else '/', uri, querystring)
     LOG.debug('salt/utils/aws: sig4:\n\t\trequesturl: {0}\n\t\theaders: {1}'.format(requesturl, new_headers))
     return new_headers, requesturl
 
@@ -341,7 +340,7 @@ def _sig_key(key, date_stamp, regionName, serviceName):
     return kSigning
 
 
-def query(params=None, setname=None, requesturl=None, region=None,
+def query(params=None, setname=None, requesturl=None, location=None,
           return_url=False, return_root=False, opts=None, provider=None,
           endpoint=None, product='ec2', sigver='2'):
     '''
@@ -392,14 +391,14 @@ def query(params=None, setname=None, requesturl=None, region=None,
 
     service_url = prov_dict.get('service_url', 'amazonaws.com')
 
-    if not region:
-        region = get_region(opts, provider)
+    if not location:
+        location = get_location(opts, provider)
 
     if endpoint is None:
         if not requesturl:
             endpoint = prov_dict.get(
                 'endpoint',
-                '{0}.{1}.{2}'.format(product, region, service_url)
+                '{0}.{1}.{2}'.format(product, location, service_url)
             )
 
             requesturl = 'https://{0}/'.format(endpoint)
@@ -433,7 +432,7 @@ def query(params=None, setname=None, requesturl=None, region=None,
 
     if sigver == '4':
         headers, requesturl = sig4(
-            method, endpoint, params, prov_dict, aws_api_version, region, product, requesturl=requesturl
+            method, endpoint, params, prov_dict, aws_api_version, location, product, requesturl=requesturl
         )
         params_with_headers = {}
     else:
@@ -534,15 +533,15 @@ def get_region_from_metadata():
 
     .. versionadded:: 2015.5.6
     '''
-    global __Region__
+    global __Location__
 
-    if __Region__ == 'do-not-get-from-metadata':
+    if __Location__ == 'do-not-get-from-metadata':
         LOG.debug('Previously failed to get AWS region from metadata. Not trying again.')
         return None
 
     # Cached region
-    if __Region__ != '':
-        return __Region__
+    if __Location__ != '':
+        return __Location__
 
     try:
         # Connections to instance meta-data must fail fast and never be proxied
@@ -553,13 +552,13 @@ def get_region_from_metadata():
     except requests.exceptions.RequestException:
         LOG.warning('Failed to get AWS region from instance metadata.', exc_info=True)
         # Do not try again
-        __Region__ = 'do-not-get-from-metadata'
+        __Location__ = 'do-not-get-from-metadata'
         return None
 
     try:
         region = result.json()['region']
-        __Region__ = region
-        return __Region__
+        __Location__ = region
+        return __Location__
     except (ValueError, KeyError):
         LOG.warning('Failed to decode JSON from instance metadata.')
         return None
@@ -567,21 +566,21 @@ def get_region_from_metadata():
     return None
 
 
-def get_region(opts=None, provider=None):
+def get_location(opts=None, provider=None):
     '''
     Return the region to use, in this order:
-        opts['region']
+        opts['location']
         provider['location']
         get_region_from_metadata()
-        DEFAULT_REGION
+        DEFAULT_LOCATION
     '''
     if opts is None:
         opts = {}
-    ret = opts.get('region')
+    ret = opts.get('location')
     if ret is None and provider is not None:
         ret = provider.get('location')
     if ret is None:
         ret = get_region_from_metadata()
     if ret is None:
-        ret = DEFAULT_REGION
+        ret = DEFAULT_LOCATION
     return ret
