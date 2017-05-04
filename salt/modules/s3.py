@@ -108,7 +108,7 @@ def delete_bucket(name, subresource='', configuration_id=None):
     return res
 
 
-def delete_bucket_object(bucket, name, subresource='', versionid=None):
+def delete_object(bucket, name, subresource='', versionid=None):
     '''
     Deletes (the subresource of) an object in a bucket.
     When deleting keys in a bucket, if you want to delete multiple objects, set
@@ -234,13 +234,13 @@ def get_bucket(name, subresource='', delimiter=None, encoding_type=None,
     return ret
 
 
-def get_bucket_object(bucket,
-                      name,
-                      subresource='',
-                      local_file=None,
-                      return_contents=False,
-                      region=None,
-                      version_id=None):
+def get_object(bucket,
+               name,
+               subresource='',
+               local_file=None,
+               return_contents=False,
+               region=None,
+               version_id=None):
     '''
     Returns (subresource of) object at path in bucket.
     When returning an object, you can choose between having it stored in the file designated by local_file,
@@ -319,7 +319,7 @@ def put_bucket(name, subresource='', **kwargs):
     return ret
 
 
-def put_bucket_object(bucket, name, subresource='', local_file=None, **kwargs):
+def put_object(bucket, name, subresource='', local_file=None, **kwargs):
     '''
     Publicly exposed function for putting stuff in buckets.
 
