@@ -310,7 +310,10 @@ def sig4(method, endpoint, params, prov_dict,
 
     new_headers['Authorization'] = authorization_header
 
-    requesturl = '{0}{1}{2}?{3}'.format(requesturl, '' if uri[0] == '/' else '/', uri, querystring)
+    requesturl = '{0}{1}{2}?{3}'.format(requesturl,
+                                        '' if uri.startswith('/') or requesturl.endswith('/') else '/',
+                                        uri,
+                                        querystring)
     LOG.debug('salt/utils/aws: sig4:\n\t\trequesturl: {0}\n\t\theaders: {1}'.format(requesturl, new_headers))
     return new_headers, requesturl
 
