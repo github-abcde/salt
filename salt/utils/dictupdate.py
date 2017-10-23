@@ -126,3 +126,67 @@ def merge(obj_a, obj_b, strategy='smart', renderer='yaml', merge_lists=False):
         merged = merge_recurse(obj_a, obj_b)
 
     return merged
+
+
+def ensure_dict_key(in_dict, keys):
+    '''
+    Ensures that in_dict contains the series of recursive keys defined in keys.
+    Keys is a string with a list of keys, separated by a colon :
+    '''
+    a_keys = keys.split(':')
+    dict_pointer = in_dict
+    while a_keys:
+        current_key = a_keys.pop(0)
+        if current_key not in dict_pointer or not isinstance(dict_pointer[current_key], dict):
+            dict_pointer[current_key] = {}
+        dict_pointer = dict_pointer[current_key]
+    return in_dict
+
+
+def ensure_dict_key_value(in_dict, keys, value):
+    '''
+    Ensures that in_dict contains the series of recursive keys defined in keys.
+    Also sets the value :)
+    keys is a string with a list of keys, separated by a colon :
+    '''
+    a_keys = keys.split(':')
+    all_but_last_keys = ':'.join(a_keys[:-1])
+    last_key = a_keys[-1]
+    ensure_dict_key(in_dict, all_but_last_keys)
+    dict_pointer = traverse_dict(in_dict, all_but_last_keys, None)
+    dict_pointer[last_key] = value
+    return in_dict
+
+
+def update_dict_key_value(in_dict, keys, value):
+    '''
+    Ensures that in_dict contains the series of recursive keys defined in keys.
+    Also updates the value.
+    keys is a string with a list of keys, separated by a colon :
+    '''
+    a_keys = keys.split(':')
+    all_but_last_keys = ':'.join(a_keys[:-1])
+    last_key = a_keys[-1]
+    ensure_dict_key(in_dict, all_but_last_keys)
+    dict_pointer = traverse_dict(in_dict, all_but_last_keys, None)
+    if last_key not in dict_pointer:
+        dict_pointer[last_key] = {}
+    dict_pointer[last_key].update(value)
+    return in_dict
+
+
+def append_dict_key_value(in_dict, keys, value):
+    '''
+    Ensures that in_dict contains the series of recursive keys defined in keys.
+    Also appends value.
+    Keys is a string with a list of keys, separated by a colon :
+    '''
+    a_keys = keys.split(':')
+    all_but_last_keys = ':'.join(a_keys[:-1])
+    last_key = a_keys[-1]
+    ensure_dict_key(in_dict, all_but_last_keys)
+    dict_pointer = traverse_dict(in_dict, all_but_last_keys, None)
+    if last_key not in dict_pointer:
+        dict_pointer[last_key] = []
+    dict_pointer[last_key].append(value)
+    return in_dict
