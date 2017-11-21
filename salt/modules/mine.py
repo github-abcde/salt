@@ -146,31 +146,40 @@ def update(clear=False, mine_functions=None):
 
     data = {}
     for func in m_data:
+        data[func] = {}
         try:
             if m_data[func] and isinstance(m_data[func], dict):
                 mine_func = m_data[func].pop('mine_function', func)
+                allow_tgt = m_data[func].pop('allow_tgt', None)
+                allow_tgt_type = m_data[func].pop('allow_tgt_Type', None)
                 if not _mine_function_available(mine_func):
                     continue
-                data[func] = __salt__[mine_func](**m_data[func])
+                data[func]['data'] = __salt__[mine_func](**m_data[func])
             elif m_data[func] and isinstance(m_data[func], list):
                 mine_func = func
                 if isinstance(m_data[func][0], dict) and 'mine_function' in m_data[func][0]:
                     mine_func = m_data[func][0]['mine_function']
+                    allow_tgt = m_data[func][0].get('allow_tgt', None)
+                    allow_tgt_type = m_data[func][0].get('allow_tgt_type', None)
                     m_data[func].pop(0)
 
                 if not _mine_function_available(mine_func):
                     continue
-                data[func] = __salt__[mine_func](*m_data[func])
+                data[func]['data'] = __salt__[mine_func](*m_data[func])
             else:
                 if not _mine_function_available(func):
                     continue
-                data[func] = __salt__[func]()
+                data[func]['data'] = __salt__[func]()
         except Exception:
             trace = traceback.format_exc()
             log.error('Function {0} in mine_functions failed to execute'
                       .format(func))
             log.debug('Error: {0}'.format(trace))
             continue
+        if allow_tgt is not None:
+            data[func]['allow_tgt'] = allow_tgt
+            if allow_tgt_type is not None:
+                data[func]['allow_tgt_type'] = allow_tgt_type
     if __opts__['file_client'] == 'local':
         if not clear:
             old = __salt__['data.get']('mine_cache')
@@ -190,6 +199,11 @@ def update(clear=False, mine_functions=None):
 def send(func, *args, **kwargs):
     '''
     Send a specific function to the mine.
+    You can specify an allow_tgt which works like any minion target, optionally
+    together with allow_tgt_type to specify the type of matcher to be used.
+    Only minions matched by this will be able to get the mine item.
+    See also: https://docs.saltstack.com/en/latest/topics/targeting/index.html
+
 
     CLI Example:
 
@@ -197,12 +211,15 @@ def send(func, *args, **kwargs):
 
         salt '*' mine.send network.ip_addrs eth0
         salt '*' mine.send eth0_ip_addrs mine_function=network.ip_addrs eth0
+        salt '*' mine.send eth0_ip_addrs mine_function=network.ip_addrs allow_tgt='G@grain:value' allow_tgt_type=compound eth0
     '''
     kwargs = salt.utils.args.clean_kwargs(**kwargs)
     mine_func = kwargs.pop('mine_function', func)
     if mine_func not in __salt__:
         return False
-    data = {}
+    allow_tgt = kwargs.pop('allow_tgt', None)
+    allow_tgt_type = kwargs.pop('allow_tgt_type', None)
+    mine_data = {func: {}}
     arg_data = salt.utils.args.arg_lookup(__salt__[mine_func])
     func_data = copy.deepcopy(kwargs)
     for ind, _ in enumerate(arg_data.get('args', [])):
@@ -220,9 +237,9 @@ def send(func, *args, **kwargs):
             f_call['args'].append(arg)
     try:
         if 'kwargs' in f_call:
-            data[func] = __salt__[mine_func](*f_call['args'], **f_call['kwargs'])
+            mine_data[func]['data'] = __salt__[mine_func](*f_call['args'], **f_call['kwargs'])
         else:
-            data[func] = __salt__[mine_func](*f_call['args'])
+            mine_data[func]['data'] = __salt__[mine_func](*f_call['args'])
     except Exception as exc:
         log.error('Function {0} in mine.send failed to execute: {1}'
                   .format(mine_func, exc))
@@ -230,12 +247,16 @@ def send(func, *args, **kwargs):
     if __opts__['file_client'] == 'local':
         old = __salt__['data.get']('mine_cache')
         if isinstance(old, dict):
-            old.update(data)
-            data = old
-        return __salt__['data.update']('mine_cache', data)
+            old.update(mine_data)
+            mine_data = old
+        return __salt__['data.update']('mine_cache', mine_data)
+    if allow_tgt is not None:
+        mine_data[func]['allow_tgt'] = allow_tgt
+        if allow_tgt_type is not None:
+            mine_data[func]['allow_tgt_type'] = allow_tgt_type
     load = {
             'cmd': '_mine',
-            'data': data,
+            'data': mine_data,
             'id': __opts__['id'],
     }
     return _mine_send(load, __opts__)
