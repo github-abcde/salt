@@ -555,17 +555,31 @@ class RemoteFuncs(object):
                 greedy=False
                 )
         minions = _res['minions']
+        allowed_minions = None
         for minion in minions:
             fdata = self.cache.fetch('minions/{0}'.format(minion), 'mine')
             if isinstance(fdata, dict):
-                fdata = fdata.get(load['fun'])
-                if fdata:
-                    ret[minion] = fdata
+                if load['fun'] not in fdata:
+                    continue
+                mine_entry = fdata[load['fun']]
+                # Backwards compatibility with non-dict mine items
+                if isinstance(mine_entry, dict):
+                    if 'allow_tgt' in mine_entry:
+                        if allowed_minions is None:
+                            allowed_minions = checker.check_minions(
+                                    mine_entry['allow_tgt'],
+                                    mine_entry.get('allow_tgt_type', 'glob'),
+                                    greedy=False)['minions']
+                        if load['id'] not in allowed_minions:
+                            continue
+                    ret[minion] = mine_entry['data']
+                else:
+                    ret[minion] = mine_entry
         return ret
 
     def _mine(self, load, skip_verify=False):
         '''
-        Return the mine data
+        Store/update the mine data
         '''
         if not skip_verify:
             if 'id' not in load or 'data' not in load:
