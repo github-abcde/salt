@@ -548,9 +548,13 @@ def _local_object_diff(object_name, object_def, current_object, **kwargs):
                                               current_item,
                                               **new_item)
                     if ret2['old']:
-                        ret = salt.utils.append_dict_key_value(ret, 'old:{}'.format(attribute), ret2['old'])
+                        ret = salt.utils.dictupdate.append_dict_key_value(ret,
+                                                                          'old:{}'.format(attribute),
+                                                                          ret2['old'])
                     if ret2['new']:
-                        ret = salt.utils.append_dict_key_value(ret, 'new:{}'.format(attribute), ret2['new'])
+                        ret = salt.utils.dictupdate.append_dict_key_value(ret,
+                                                                          'new:{}'.format(attribute),
+                                                                          ret2['new'])
             elif object_def[attribute]['type'] == dict:
                 log.debug(__name__ + ': _local_object_diff: Comparing dict-subattribute {}'.format(attribute))
                 ret2 = _local_object_diff('{}.{}'.format(object_name, attribute),
