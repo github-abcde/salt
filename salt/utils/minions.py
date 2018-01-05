@@ -38,6 +38,7 @@ except ImportError:
 
 log = logging.getLogger(__name__)
 
+MINE_MAGIC_DATA_ID = '__data__'
 TARGET_REX = re.compile(
         r'''(?x)
         (
@@ -1116,9 +1117,26 @@ def mine_get(tgt, fun, tgt_type='glob', opts=None):
     cache = salt.cache.factory(opts)
     for minion in minions:
         mdata = cache.fetch('minions/{0}'.format(minion), 'mine')
-        if mdata is None:
-            continue
-        fdata = mdata.get(fun)
-        if fdata:
-            ret[minion] = fdata
+        if isinstance(mdata, dict):
+            if fun not in mdata:
+                continue
+            mine_entry = mdata[fun]
+            # Backwards compatibility with mine-items that do not have MINE_MAGIC_DATA_ID
+            if isinstance(mine_entry, dict):
+                if 'allow_tgt' in mine_entry:
+                    if allowed_minions is None:
+                        allowed_minions = checker.check_minions(
+                                mine_entry['allow_tgt'],
+                                mine_entry.get('allow_tgt_type', 'glob'),
+                                greedy=False)
+                    if opts.get('id', None) not in allowed_minions:
+                        continue
+                if MINE_MAGIC_DATA_ID in mine_entry:
+                    if mine_entry[MINE_MAGIC_DATA_ID]:
+                        ret[minion] = mine_entry[MINE_MAGIC_DATA_ID]
+                else:
+                    # Or if this is a mine item with a dict as data, but no MINE_MAGIC_DATA_ID
+                    ret[minion] = mine_entry
+            elif mine_entry:
+                ret[minion] = mine_entry
     return ret
