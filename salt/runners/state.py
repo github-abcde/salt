@@ -90,19 +90,14 @@ def orchestrate(mods,
     __opts__['file_client'] = 'local'
     minion = salt.minion.MasterMinion(__opts__)
 
-    if pillarenv is None and 'pillarenv' in __opts__:
-        pillarenv = __opts__['pillarenv']
-    if saltenv is None and 'saltenv' in __opts__:
-        saltenv = __opts__['saltenv']
-
     running = minion.functions['state.sls'](
             mods,
             test,
             exclude,
             pillar=pillar,
-            saltenv=saltenv,
-            pillarenv=pillarenv,
-            pillar_enc=pillar_enc,
+            saltenv=saltenv or minion.opts.get('saltenv', None),
+            pillarenv=pillarenv or minion.opts.get('pillarenv', None),
+            pillar_enc=pillar_enc or minion.opts.get('pillar_enc', None),
             orchestration_jid=orchestration_jid)
     ret = {'data': {minion.opts['id']: running}, 'outputter': 'highstate'}
     res = __utils__['state.check_result'](ret['data'])
@@ -215,8 +210,8 @@ def orchestrate_show_sls(mods,
         test,
         exclude,
         pillar=pillar,
-        pillarenv=pillarenv,
-        pillar_enc=pillar_enc)
+        pillarenv=pillarenv or minion.opts.get('pillarenv', None),
+        pillar_enc=pillar_enc or minion.opts.get('pillar_enc', None))
 
     ret = {minion.opts['id']: running}
     return ret
